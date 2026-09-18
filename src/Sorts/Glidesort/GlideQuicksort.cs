@@ -100,13 +100,18 @@ internal static class GlideQuicksort
     {
         var state = new BidirPartitionState<T>(new TwoPieceSpan<T>(left, right), default);
         state.AttachOutput(new TwoPieceSpan<T>(dest), new TwoPieceSpan<T>(scratch));
-        state.PartitionBidir(ref pivot, cmp, invert: false);
+        // The seam's pivot is a pure value with no tracked element (-1 disables
+        // tracking — the recursive driver passes the pivot element's index instead).
+        state.PartitionBidir(ref pivot, cmp, invert: false, pivotIdx: -1,
+            out _, out _);
     }
 
     /// <summary>stable_bidir_quicksort_into (stable_quicksort.rs:368-546): sorts the
     /// two-piece input (left ++ right) into dest using scratch as workspace; dest and
     /// scratch each equal the input's total length. strategy/strategyPivot encode
-    /// PartitionStrategy; limit is the remaining recursion depth (0 → EagerSort).</summary>
+    /// PartitionStrategy (strategyPivot = the carried pivot element's logical index in
+    /// the input concatenation, when the strategy carries one); limit is the remaining
+    /// recursion depth (0 → EagerSort).</summary>
     private static void QuicksortInto<T, TC>(
         TwoPieceSpan<T> left, TwoPieceSpan<T> right,
         TwoPieceSpan<T> dest, TwoPieceSpan<T> scratch,
@@ -114,14 +119,13 @@ internal static class GlideQuicksort
         where TC : struct, IIsLess<T>
     {
         int n = left.Length + right.Length;
-
         if (n < GlideSmallSort.SmallSort || limit == 0)
         {
-            // Base case (stable_quicksort.rs:389-407): move input to dest, then sort
-            // in place. Upstream skips the move per side when the input already sits
-            // in dest; the element-wise copy is a self-copy no-op then.
-            TwoPieceSpan<T> input = ConcatLogical(left, right);
-            CopyTwoPieceToTwoPiece(input, dest);
+            // Base case (stable_quicksort.rs:389-407): move input to dest per side,
+            // skipping the side already in place (upstream: if left.begin() !=
+            // dest.begin() / right.begin() != right_dest.begin()). At the top call and
+            // for each recursion's dest-resident side the move is a no-op.
+            MoveInputToDest(left, right, dest);
             if (n < GlideSmallSort.SmallSort)
                 GlideSmallSort.Sort(AsSingleOrCopy(dest), cmp);
             else
@@ -142,24 +146,32 @@ internal static class GlideQuicksort
     {
         int n = left.Length + right.Length;
 
-        // Pivot selection (stable_quicksort.rs:411-425). LeftWithPivot carries an index;
-        // LeftIfNewPivotEquals re-checks !is_less(carried, new) to decide the side — the
-        // port never emits that strategy (only LeftWithPivot / RightWithNewPivot are
-        // produced below, per the LeftIfNewPivotEqualsCopy-free is_copy_type()==false
-        // path), so it maps to partition-left.
+        // Pivot selection + side decision (stable_quicksort.rs:411-425). LeftWithPivot
+        // uses the carried element; LeftIfNewPivotEquals selects fresh and partitions
+        // left iff the carried element is NOT less than the new pivot (equals batch);
+        // RightWithNewPivot always partitions right.
         int pivotIdx;
+        bool partitionLeft;
         if (strategy == PartitionStrategyKind.LeftWithPivot)
+        {
             pivotIdx = strategyPivot;
+            partitionLeft = true;
+        }
         else
+        {
             pivotIdx = SelectPivotTwoPiece(left, right, cmp);
-        bool partitionLeft = strategy != PartitionStrategyKind.RightWithNewPivot;
+            partitionLeft = strategy == PartitionStrategyKind.LeftIfNewPivotEquals
+                && !cmp.IsLess(in At(left, right, strategyPivot), in At(left, right, pivotIdx));
+        }
 
-        // Run the partition with a local pivot copy (pivot_pos read into a local).
+        // Partition around the pivot value, tracking the pivot element's landing spot
+        // (upstream's returned pivot_pos). invert = partitionLeft (rs:428-431).
         T pivot = At(left, right, pivotIdx);
         var state = new BidirPartitionState<T>(
             new TwoPieceSpan<T>(left.A, left.B), new TwoPieceSpan<T>(right.A, right.B));
         state.AttachOutput(dest, scratch);
-        state.PartitionBidir(ref pivot, cmp, invert: !partitionLeft);
+        state.PartitionBidir(ref pivot, cmp, invert: partitionLeft, pivotIdx,
+            out bool pivotOutDest, out int pivotOutAbs);
         state.Take(out TwoPieceSpan<T> lessInDest, out TwoPieceSpan<T> lessInScratch,
             out TwoPieceSpan<T> geqInScratch, out TwoPieceSpan<T> geqInDest);
 
@@ -170,17 +182,44 @@ internal static class GlideQuicksort
         dest.SplitAt(lessN, out TwoPieceSpan<T> lessRecDest, out TwoPieceSpan<T> geqRecDest);
         scratch.SplitAt(geqN, out TwoPieceSpan<T> geqRecScratch, out TwoPieceSpan<T> lessRecScratch);
 
-        // GapGuard replacement: move the scratch-resident results into their slots in
-        // the recursive dest regions (upstream defers this via guards; the port copies
-        // eagerly — same element movement, no panic safety).
-        CopyTwoPieceToTwoPiece(lessInScratch,
-            SliceOfTwoPiece(lessRecDest, lessInDest.Length, lessInScratch.Length));
-        CopyTwoPieceToTwoPiece(geqInScratch,
-            SliceOfTwoPiece(geqRecDest, 0, geqInScratch.Length));
+        // Locate the pivot element among the four buckets from its recorded write
+        // position: dest holds [lessInDest | middle | geqInDest], scratch holds
+        // [geqInScratch | middle | lessInScratch]. Under a valid comparator it lands in
+        // a geq bucket iff the partition was non-inverted (rs:507-508 pivot_in_geq).
+        bool pivotInGeq;
+        int pivotGeqIdx; // logical index in the concatenation geqInScratch ++ geqInDest.
+        if (pivotOutDest)
+        {
+            if (pivotOutAbs < lessInDest.Length)
+            {
+                pivotInGeq = false;
+                pivotGeqIdx = 0;
+            }
+            else
+            {
+                pivotInGeq = true;
+                pivotGeqIdx = geqInScratch.Length + (pivotOutAbs - (n - geqInDest.Length));
+            }
+        }
+        else if (pivotOutAbs < geqInScratch.Length)
+        {
+            pivotInGeq = true;
+            pivotGeqIdx = pivotOutAbs;
+        }
+        else
+        {
+            pivotInGeq = false;
+            pivotGeqIdx = 0;
+        }
 
-        // Both sides small: overlapped small sorts (stable_quicksort.rs:464-487).
+        // Both sides small: GapGuard drops copy the scratch-resident results into their
+        // recursive-dest slots (rs:465-467), then overlapped small sorts (rs:464-487).
         if (lessN < GlideSmallSort.SmallSort && geqN < GlideSmallSort.SmallSort)
         {
+            CopyTwoPieceToTwoPiece(lessInScratch,
+                SliceOfTwoPiece(lessRecDest, lessInDest.Length, lessInScratch.Length));
+            CopyTwoPieceToTwoPiece(geqInScratch,
+                SliceOfTwoPiece(geqRecDest, 0, geqInScratch.Length));
             Span<T> whole = AsSingleOrCopy(dest);
             if (lessN <= 32 && (lessN & 0b1000) > 0)
                 GlideSmallSort.Sort(whole.Slice(0, (lessN + 0b111) & ~0b111), cmp);
@@ -196,53 +235,46 @@ internal static class GlideQuicksort
             return;
         }
 
-        // Empty less side on a fresh-pivot partition: recurse on geq only with the
-        // pivot carried over (stable_quicksort.rs:489-502). Upstream passes
-        // (geq_in_scratch, geq_in_dest) as the recursive input; the port has already
-        // moved geq_in_scratch's contents into geqRecDest's front, so the recursive
-        // input is that region itself (dest == input, sorted in place). The carried
-        // pivot's logical index is 0 in the input's concatenation.
+        // Empty less side on a fresh-pivot partition: recurse on geq only, carrying the
+        // pivot ELEMENT's position (rs:489-502) — the region is all >= pivot, so the
+        // inverted next level batches the pivot's equals into its skippable less side.
         if (lessN == 0 && !partitionLeft)
         {
-            TwoPieceSpan<T> geqFront = SliceOfTwoPiece(geqRecDest, 0, geqInScratch.Length);
-            TwoPieceSpan<T> geqInput = ConcatLogical(geqFront, geqInDest);
             QuicksortInto(
-                geqInput, default,
+                geqInScratch, geqInDest,
                 geqRecDest, geqRecScratch,
-                PartitionStrategyKind.LeftWithPivot, strategyPivot: 0,
+                PartitionStrategyKind.LeftWithPivot, strategyPivot: pivotGeqIdx,
                 limit - 1, cmp);
             return;
         }
-        // Two-sided recursion (stable_quicksort.rs:504-545). Both sides' inputs live in
-        // their recursive dest regions already (the copies above placed lessInScratch
-        // and geqInScratch); recurse in place: sort (lessRecDest) then (geqRecDest).
+        // Two-sided recursion (rs:504-545). Scratch-resident sides are passed as
+        // recursive input directly (GapGuard::take_data); the base case moves them.
+        // less strategy is RightWithNewPivot (the Copy variant needs is_copy_type);
+        // geq strategy is LeftIfNewPivotEquals carrying the pivot element's position
+        // when it landed in the geq region (always, at non-inverted levels).
         if (!partitionLeft)
         {
-            // less side: input is (lessInDest, lessInScratch-moved) = lessRecDest.
             QuicksortInto(
-                lessRecDest, default,
+                lessInDest, lessInScratch,
                 lessRecDest, lessRecScratch,
                 PartitionStrategyKind.RightWithNewPivot, strategyPivot: 0,
                 limit - 1, cmp);
         }
+        else
+        {
+            // Less recursion skipped (equal batch): the GapGuard would DROP here,
+            // copying lessInScratch into its slot behind lessInDest (rs:443-460).
+            CopyTwoPieceToTwoPiece(lessInScratch,
+                SliceOfTwoPiece(lessRecDest, lessInDest.Length, lessInScratch.Length));
+        }
+        PartitionStrategyKind geqStrategy = !partitionLeft && pivotInGeq
+            ? PartitionStrategyKind.LeftIfNewPivotEquals
+            : PartitionStrategyKind.RightWithNewPivot;
         QuicksortInto(
-            geqRecDest, default,
+            geqInScratch, geqInDest,
             geqRecDest, geqRecScratch,
-            PartitionStrategyKind.RightWithNewPivot, strategyPivot: 0,
+            geqStrategy, strategyPivot: pivotGeqIdx,
             limit - 1, cmp);
-    }
-
-    /// <summary>Logical concatenation of two two-piece views (upstream concat of two
-    /// MutSlices): the result re-pieces A/B so that [0..aLen) maps to a and the rest to
-    /// b's logical order. Implemented by splitting both views at the seam.</summary>
-    private static TwoPieceSpan<T> ConcatLogical<T>(TwoPieceSpan<T> a, TwoPieceSpan<T> b)
-    {
-        // a fits entirely in the head piece; b follows: piecewise A = a's pieces.
-        if (a.B.IsEmpty)
-            return new TwoPieceSpan<T>(a.A, AsSingleOrCopy(b));
-        // General case: three or four pieces cannot be represented — but the driver's
-        // call pattern guarantees at most one non-trivial piece per side here.
-        return new TwoPieceSpan<T>(AsSingleOrCopy(a), AsSingleOrCopy(b));
     }
 
     /// <summary>The logical slice [i, i+len) of a two-piece view.</summary>
@@ -256,6 +288,20 @@ internal static class GlideQuicksort
     /// <summary>Copies the logical contents of src into the equal-length logical dst
     /// (upstream's move_to — element-wise because the pieces may not be pairwise
     /// contiguous).</summary>
+    /// <summary>Base-case input move (stable_quicksort.rs:392-397): left → dest's
+    /// front and right → dest's tail, each side skipped when it already sits there
+    /// (first-element ref identity — the recursive layout guarantees a matching side
+    /// starts exactly at dest's begin / at left.Length).</summary>
+    private static void MoveInputToDest<T>(TwoPieceSpan<T> left, TwoPieceSpan<T> right, TwoPieceSpan<T> dest)
+    {
+        int leftLen = left.Length;
+        if (leftLen > 0 && !Unsafe.AreSame(ref left[0], ref dest[0]))
+            CopyTwoPieceToTwoPiece(left, SliceOfTwoPiece(dest, 0, leftLen));
+        int rightLen = right.Length;
+        if (rightLen > 0 && !Unsafe.AreSame(ref right[0], ref dest[leftLen]))
+            CopyTwoPieceToTwoPiece(right, SliceOfTwoPiece(dest, leftLen, rightLen));
+    }
+
     private static void CopyTwoPieceToTwoPiece<T>(TwoPieceSpan<T> src, TwoPieceSpan<T> dst)
     {
         int n = src.Length;
@@ -368,6 +414,15 @@ internal ref struct BidirPartitionState<T>
         _destBwdIdx = dest.Length;
     }
 
+    // Pivot-element tracking (upstream's pivot_pos bookkeeping): _pivotRel is the
+    // pivot element's logical index in the current (ForwardScan ++ BackwardScan)
+    // concatenation, -1 once consumed. Rebalancing preserves it (the concatenation
+    // order is unchanged). When the step that consumes the pivot element runs, the
+    // write position — (toDest, absolute index in Dest or Scratch) — is recorded.
+    private int _pivotRel = -1;
+    private bool _pivotOutDest;
+    private int _pivotOutAbs;
+
     /// <summary>partition_one_forward (stable_quicksort.rs:157-184): reads the scan head,
     /// writes it to dest's forward head if less than pivot else scratch's forward head.
     /// toDest reports which region received it, outIdx the logical index in that region.
@@ -452,15 +507,25 @@ internal ref struct BidirPartitionState<T>
     }
 
     /// <summary>partition_bidir (stable_quicksort.rs:283-337): fully partitions the
-    /// remaining input around the pivot value (read-only, held out-of-line — upstream
-    /// moves pivot_pos into a local via WriteBackPivot and stops the scans at its array
-    /// position; the port needs no scan limits because the pivot is never in the scans).
-    /// When one scan exhausts, the other's remainder is split evenly into a new
-    /// forward/backward pair. invert selects the reversed comparator (upstream's
-    /// cmp_from_closure(|a, b| !is_less(b, a)), used when partitioning the geq side).</summary>
-    public void PartitionBidir<TC>(ref T pivot, TC cmp, bool invert)
+    /// remaining input around the pivot value. pivotIdx is the pivot ELEMENT's logical
+    /// index in the input concatenation (-1 to disable tracking — the brief's public
+    /// Partition seam passes a value with no tracked element); on completion
+    /// (pivotOutDest, pivotOutAbs) reports where that element was written — the port's
+    /// equivalent of upstream's returned pivot_pos. Upstream stops the scans at the
+    /// pivot's array position and re-records it when the special-case branches consume
+    /// it; the port holds the pivot VALUE out-of-line and instead tracks the element's
+    /// output position through every step (same net bookkeeping). When one scan
+    /// exhausts, the other's remainder is split evenly into a new forward/backward
+    /// pair. invert selects the reversed comparator (upstream's
+    /// cmp_from_closure(|a, b| !is_less(b, a)), used when partition_left — the geq-side
+    /// recursion whose input may still contain equals of an ancestor pivot).</summary>
+    public void PartitionBidir<TC>(ref T pivot, TC cmp, bool invert, int pivotIdx,
+        out bool pivotOutDest, out int pivotOutAbs)
         where TC : struct, IIsLess<T>
     {
+        _pivotRel = pivotIdx;
+        _pivotOutDest = false;
+        _pivotOutAbs = 0;
         while (true)
         {
             int forwardLimit = ForwardScan.Length;
@@ -472,7 +537,11 @@ internal ref struct BidirPartitionState<T>
             PartitionBidirN(ref pivot, cmp, invert, limit);
 
             if (ForwardScan.Length == 0 && BackwardScan.Length == 0)
+            {
+                pivotOutDest = _pivotOutDest;
+                pivotOutAbs = _pivotOutAbs;
                 return;
+            }
             if (ForwardScan.Length == 0)
             {
                 // Handle odd input sizes.
@@ -518,34 +587,60 @@ internal ref struct BidirPartitionState<T>
         }
     }
 
-    /// <summary>One forward or backward step with the (possibly inverted) comparison.
-    /// Inversion is upstream's cmp_from_closure(|a, b| !is_less(b, a)) — used when
-    /// partitioning on the left side of the recursion: it routes elements NOT less than
-    /// the pivot to the front regions and less-than elements to the back, which the
-    /// caller then interprets with swapped region roles.</summary>
+    /// <summary>One forward or backward step with the (possibly inverted) comparison,
+    /// plus pivot-element tracking. Inversion is upstream's
+    /// cmp_from_closure(|a, b| !is_less(b, a)) — used when partitioning on the LEFT
+    /// (stable_quicksort.rs:428-431 inverts exactly when partition_left): the
+    /// condition-true bucket then holds elements &lt;= pivot (equals included), which
+    /// is what makes the equal-batch skip sound.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void PartitionOneAny<TC>(ref T pivot, TC cmp, bool invert, bool forward)
         where TC : struct, IIsLess<T>
     {
+        // Pre-step length: the backward step consumes logical index len-1 of the
+        // current concatenation, the forward step index 0.
+        int len = ForwardScan.Length + BackwardScan.Length;
+        bool toDest;
+        int outIdx;
         if (!invert)
         {
             if (forward)
-                PartitionOneForward(ref pivot, cmp, out _, out _);
+                PartitionOneForward(ref pivot, cmp, out toDest, out outIdx);
             else
-                PartitionOneBackward(ref pivot, cmp, out _, out _);
-            return;
+                PartitionOneBackward(ref pivot, cmp, out toDest, out outIdx);
         }
-        // Inverted comparison: is_inverted(x, y) = !cmp.IsLess(y, x).
-        if (forward)
-            PartitionOneForwardInverted(ref pivot, cmp);
+        else if (forward)
+            PartitionOneForwardInverted(ref pivot, cmp, out toDest, out outIdx);
         else
-            PartitionOneBackwardInverted(ref pivot, cmp);
+            PartitionOneBackwardInverted(ref pivot, cmp, out toDest, out outIdx);
+
+        // Track the pivot element (upstream's returned pivot_pos write-back).
+        if (_pivotRel >= 0)
+        {
+            if (forward)
+            {
+                if (_pivotRel == 0)
+                {
+                    _pivotOutDest = toDest;
+                    _pivotOutAbs = outIdx;
+                    _pivotRel = -1;
+                }
+                else
+                    _pivotRel--;
+            }
+            else if (_pivotRel == len - 1)
+            {
+                _pivotOutDest = toDest;
+                _pivotOutAbs = outIdx;
+                _pivotRel = -1;
+            }
+        }
     }
 
     /// <summary>Forward step under the inverted comparator: the write that normally
     /// goes to dest's forward head goes to scratch's forward head and vice versa.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void PartitionOneForwardInverted<TC>(ref T pivot, TC cmp)
+    private void PartitionOneForwardInverted<TC>(ref T pivot, TC cmp, out bool toDest, out int outIdx)
         where TC : struct, IIsLess<T>
     {
         ref T scan = ref ForwardScan[0];
@@ -553,9 +648,17 @@ internal ref struct BidirPartitionState<T>
         int destOut = _numAtDestBegin;
         int scratchOut = _scratchFwdIdx - _numAtDestBegin;
         if (invertedLess)
+        {
             Dest[destOut] = scan;
+            toDest = true;
+            outIdx = destOut;
+        }
         else
+        {
             Scratch[scratchOut] = scan;
+            toDest = false;
+            outIdx = scratchOut;
+        }
         if (invertedLess) _numAtDestBegin++;
         _scratchFwdIdx++;
         ForwardScan.SplitOffBegin(1, out _);
@@ -563,7 +666,7 @@ internal ref struct BidirPartitionState<T>
 
     /// <summary>Backward step under the inverted comparator.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void PartitionOneBackwardInverted<TC>(ref T pivot, TC cmp)
+    private void PartitionOneBackwardInverted<TC>(ref T pivot, TC cmp, out bool toDest, out int outIdx)
         where TC : struct, IIsLess<T>
     {
         ref T scan = ref BackwardScan[BackwardScan.Length - 1];
@@ -571,9 +674,17 @@ internal ref struct BidirPartitionState<T>
         int destOut = _destBwdIdx + _numAtScratchEnd - 1;
         int scratchOut = Scratch.Length - _numAtScratchEnd - 1;
         if (invertedLess)
+        {
             Scratch[scratchOut] = scan;
+            toDest = false;
+            outIdx = scratchOut;
+        }
         else
+        {
             Dest[destOut] = scan;
+            toDest = true;
+            outIdx = destOut;
+        }
         if (invertedLess) _numAtScratchEnd++;
         _destBwdIdx--;
         BackwardScan.SplitOffEnd(1, out _);

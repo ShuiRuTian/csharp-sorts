@@ -73,6 +73,33 @@ public class GlideQuicksortTests
     }
 
     [Fact]
+    public void QuicksortCarriesPivotPositionThroughSkip()
+    {
+        // Strategy-layer regression: the LeftWithPivot fast path (empty less side,
+        // rs:489-502) must carry the pivot ELEMENT's tracked position, not index 0.
+        // n=56 keeps pivot selection a plain median-of-3 over positions 0, 21, 49.
+        // Values (40, 0, 0) there make the median the minimum, so level 0 partitions
+        // right around 0 with an empty less side and recurses on the whole input as
+        // LeftWithPivot with the pivot element still at its logical index 21.
+        // Level 1 partitions left (inverted) around that carried element: its less
+        // side is exactly the two 0's — all-equal, so the equal-batch skip is sound.
+        // If the carry degenerated to index 0, level 1 would pivot on v[0]=40
+        // instead, its less side {40, 0, 0} would not be all-equal, and the
+        // unconditional skip would leave those three elements unsorted.
+        const int n = 56;
+        var v = new int[n];
+        for (int i = 0; i < n; i++)
+            v[i] = 41 + i; // 41..96: distinct, all above the level-0 pivot value
+        v[0] = 40;  // sampled position a — deliberately NOT the pivot value
+        v[21] = 0;  // sampled position b — selected pivot (the minimum)
+        v[49] = 0;  // sampled position c — second minimum, forces median3 -> b
+        Assert.Equal(21, GlideQuicksort.ChoosePivot<int, ComparableCmp<int>>(v, new()));
+        var expected = v.OrderBy(x => x).ToArray();
+        SortWithQuicksort(v, limit: 64);
+        Assert.Equal(expected, v);
+    }
+
+    [Fact]
     public void PartitionRoutesElementsAroundPivot()
     {
         // The brief's Partition seam. Per the header ASCII art the four output regions
