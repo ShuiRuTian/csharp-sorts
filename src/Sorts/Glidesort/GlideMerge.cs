@@ -94,8 +94,11 @@ internal static class GlideMerge
     }
 
     /// <summary>Contiguous region of length starting at the beginning of start — the
-    /// Span equivalent of upstream's MutSlice::concat on adjacent slices (the caller
-    /// guarantees contiguity, which upstream asserts via abort).</summary>
+    /// Span equivalent of upstream's MutSlice::concat on adjacent slices. The seams that
+    /// build regions from caller input (PhysicalMerge/Triple/Quad) verify contiguity on
+    /// entry via AreContiguous (Unsafe.AreSame on the boundary refs, mirroring upstream's
+    /// concat abort); regions built internally from one span's slices are contiguous by
+    /// construction.</summary>
     private static Span<T> Region<T>(Span<T> start, int length) =>
         MemoryMarshal.CreateSpan(ref MemoryMarshal.GetReference(start), length);
 
@@ -117,9 +120,14 @@ internal static class GlideMerge
     /// invokes; the imbalance-guarded ops are not ported because every C# type is
     /// bitwise-copyable with no drop glue (upstream may_call_ord_on_copy() == true).
     /// Indices are plain ints relative to each span's base so they may cross for a bad
-    /// comparison operator, exactly as upstream's raw pointers do; all reads/writes stay
-    /// inside the spans regardless. left and right may alias dst (gap constructions) but
-    /// never each other's unread elements — the op order (read, then write) preserves that.</summary>
+    /// comparison operator, exactly as upstream's raw pointers do. Reads and writes stay
+    /// inside each span while the comparator is valid; with a broken comparator,
+    /// GlideSmallSort's fixed-k symmetric paths may read across the adjacent left/right
+    /// span boundary — still in-bounds of the underlying buffer (upstream's raw pointers
+    /// behave identically), after which SymmetricMergeSuccessful fails and the caller
+    /// restores from its backup copy. left and right may alias dst (gap constructions)
+    /// but never each other's unread elements — the op order (read, then write) preserves
+    /// that.</summary>
     internal ref struct BranchlessMergeState<T>
     {
         private readonly Span<T> _left;
@@ -420,14 +428,44 @@ internal static class GlideMerge
         throw new ArgumentException(
             $"dst.Length ({dstLen}) violates the merge contract: must equal left.Length + right.Length ({leftLen + rightLen}).");
 
+    /// <summary>Contiguity of two runs — the Span equivalent of the pointer comparison
+    /// upstream's MutSlice::concat aborts on: left must end exactly where right begins.
+    /// A single Unsafe.AreSame on the boundary refs expresses it (a ref one-past-the-end
+    /// of left equals right's first ref iff the runs are adjacent in one allocation).
+    /// Empty runs at the same position compare equal, matching concat on empty slices.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool AreContiguous<T>(Span<T> left, Span<T> right) =>
+        Unsafe.AreSame(
+            ref Unsafe.Add(ref MemoryMarshal.GetReference(left), left.Length),
+            ref MemoryMarshal.GetReference(right));
+
+    /// <summary>Non-contiguous input at a physical-merge seam — mirrors upstream's
+    /// assert_abort on MutSlice::concat of non-adjacent slices. Without the check Region()
+    /// would silently over-run the left allocation, so the seams detect it instead.</summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void ThrowNotContiguous(string firstName, string secondName) =>
+        throw new InvalidOperationException(
+            $"{firstName} and {secondName} violate the physical merge contract: {firstName} must end exactly where {secondName} begins (contiguous runs in one region).");
+
     /// <summary>physical_merge (physical_merges.rs:23-73): merges the contiguous sorted
     /// runs left, right in place — the merged result occupies [left | right], which the
     /// caller slices (upstream returns that MutSlice). scratch is workspace: the upstream
     /// contract supplies at least half the total input length, which always takes the
     /// move-into-scratch path; smaller scratch degrades to the in-place swap path but
-    /// stays correct. left must end exactly where right begins (upstream aborts on
-    /// non-contiguity; a Span cannot cheaply express that check, so it is contract-only).</summary>
+    /// stays correct. Contiguity (left ends exactly where right begins) is verified on
+    /// entry, mirroring upstream's concat abort; the internal recursion runs unguarded
+    /// (its slices are contiguous by construction).</summary>
     internal static void PhysicalMerge<T, TC>(Span<T> left, Span<T> right, Span<T> scratch, TC cmp)
+        where TC : struct, IIsLess<T>
+    {
+        if (!AreContiguous(left, right))
+            ThrowNotContiguous(nameof(left), nameof(right));
+        PhysicalMergeCore(left, right, scratch, cmp);
+    }
+
+    /// <summary>physical_merge loop body — every call site passes contiguous slices by
+    /// construction (slices of one region, shrunk only at the outer ends), so no guard.</summary>
+    private static void PhysicalMergeCore<T, TC>(Span<T> left, Span<T> right, Span<T> scratch, TC cmp)
         where TC : struct, IIsLess<T>
     {
         while (true)
@@ -460,7 +498,7 @@ internal static class GlideMerge
             // Scratch too small: swap left1/right0 contents in place, merge the right
             // half recursively, and keep shrinking the left half around the loop.
             SwapSpans(left1, right0);
-            PhysicalMerge(right0, right1, scratch, cmp);
+            PhysicalMergeCore(right0, right1, scratch, cmp);
             left = left0;
             right = left1;
         }
@@ -487,10 +525,15 @@ internal static class GlideMerge
 
     /// <summary>physical_triple_merge (physical_merges.rs:78-108): merges the contiguous
     /// sorted runs a, b, c in place; the result occupies [a | b | c]. scratch workspace,
-    /// same contract as PhysicalMerge.</summary>
+    /// same contract as PhysicalMerge. Contiguity of a|b and b|c is verified on entry,
+    /// mirroring upstream's concat abort; internal merges run unguarded.</summary>
     internal static void PhysicalTripleMerge<T, TC>(Span<T> a, Span<T> b, Span<T> c, Span<T> scratch, TC cmp)
         where TC : struct, IIsLess<T>
     {
+        if (!AreContiguous(a, b))
+            ThrowNotContiguous(nameof(a), nameof(b));
+        if (!AreContiguous(b, c))
+            ThrowNotContiguous(nameof(b), nameof(c));
         if (a.Length < c.Length)
         {
             if (TryMergeIntoScratch(a, b, scratch, out Span<T> ab, cmp))
@@ -501,8 +544,8 @@ internal static class GlideMerge
             }
             else
             {
-                PhysicalMerge(a, b, scratch, cmp);
-                PhysicalMerge(Region(a, a.Length + b.Length), c, scratch, cmp);
+                PhysicalMergeCore(a, b, scratch, cmp);
+                PhysicalMergeCore(Region(a, a.Length + b.Length), c, scratch, cmp);
             }
         }
         else
@@ -515,19 +558,27 @@ internal static class GlideMerge
             }
             else
             {
-                PhysicalMerge(b, c, scratch, cmp);
-                PhysicalMerge(a, Region(b, b.Length + c.Length), scratch, cmp);
+                PhysicalMergeCore(b, c, scratch, cmp);
+                PhysicalMergeCore(a, Region(b, b.Length + c.Length), scratch, cmp);
             }
         }
     }
 
     /// <summary>physical_quad_merge (physical_merges.rs:113-175): merges the contiguous
     /// sorted runs a, b, c, d in place; the result occupies [a | b | c | d]. scratch
-    /// workspace, same contract as PhysicalMerge.</summary>
+    /// workspace, same contract as PhysicalMerge. Contiguity of a|b, b|c and c|d is
+    /// verified on entry, mirroring upstream's concat abort; internal merges run
+    /// unguarded.</summary>
     internal static void PhysicalQuadMerge<T, TC>(
         Span<T> a, Span<T> b, Span<T> c, Span<T> d, Span<T> scratch, TC cmp)
         where TC : struct, IIsLess<T>
     {
+        if (!AreContiguous(a, b))
+            ThrowNotContiguous(nameof(a), nameof(b));
+        if (!AreContiguous(b, c))
+            ThrowNotContiguous(nameof(b), nameof(c));
+        if (!AreContiguous(c, d))
+            ThrowNotContiguous(nameof(c), nameof(d));
         int leftLen = a.Length + b.Length;
         int rightLen = c.Length + d.Length;
         int total = leftLen + rightLen;
@@ -566,19 +617,19 @@ internal static class GlideMerge
         {
             // The merged left pair (in scratch) merges with c ⊕ d (merged in place into
             // the right region, using the vacated left region as scratch) back into [a|b].
-            PhysicalMerge(c, d, leftRegion, cmp);
+            PhysicalMergeCore(c, d, leftRegion, cmp);
             MergeLeftGap(leftMerged, leftRegion, rightRegion, cmp);
         }
         else if (rightOk)
         {
-            PhysicalMerge(a, b, rightRegion, cmp);
+            PhysicalMergeCore(a, b, rightRegion, cmp);
             MergeRightGap(leftRegion, rightMerged, rightRegion, cmp);
         }
         else
         {
-            PhysicalMerge(a, b, scratch, cmp);
-            PhysicalMerge(c, d, scratch, cmp);
-            PhysicalMerge(leftRegion, rightRegion, scratch, cmp);
+            PhysicalMergeCore(a, b, scratch, cmp);
+            PhysicalMergeCore(c, d, scratch, cmp);
+            PhysicalMergeCore(leftRegion, rightRegion, scratch, cmp);
         }
     }
 

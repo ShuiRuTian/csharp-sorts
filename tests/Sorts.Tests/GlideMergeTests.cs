@@ -114,6 +114,19 @@ public class GlideMergeTests
     }
 
     [Fact]
+    public void PhysicalMergeRejectsNonContiguousRuns()
+    {
+        // Upstream aborts when concat sees non-adjacent slices; the seam detects the
+        // same violation (left must end exactly where right begins) and throws instead
+        // of letting Region() run past the end of the left allocation.
+        var left = SortedRun(Distribution.Random, 50, 31);
+        var right = SortedRun(Distribution.Random, 50, 32); // separate allocation
+        var scratch = new int[50];
+        Assert.Throws<InvalidOperationException>(() =>
+            GlideMerge.PhysicalMerge<int, ComparableCmp<int>>(left, right, scratch, new()));
+    }
+
+    [Fact]
     public void EagerSortIsStableOnEqualKeys()
     {
         // EagerSort must preserve input order of equal-key elements (payload).
