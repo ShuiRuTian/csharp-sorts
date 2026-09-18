@@ -264,7 +264,12 @@ internal static class GlideSmallSort
 
             Span<T> backupSrc = _srcBuf.Slice(_srcPos);
             Span<T> backupDst = _dstBuf.Slice(_dstPos);
-            var merge = new BranchlessMergeState<T>(_srcBuf.Slice(_srcPos), _dstBuf.Slice(_dstPos));
+            // The full BranchlessMergeState from GlideMerge (upstream small_sort.rs
+            // imports the very same branchless_merge.rs type) — the two adjacent src
+            // halves are passed as the left/right runs.
+            Span<T> curSrc = _srcBuf.Slice(_srcPos, n);
+            var merge = new GlideMerge.BranchlessMergeState<T>(
+                curSrc.Slice(0, k), curSrc.Slice(k), _dstBuf.Slice(_dstPos, n));
             for (int i = 0; i < k; i++)
             {
                 merge.MergeOneAtBegin(cmp);
@@ -288,10 +293,13 @@ internal static class GlideSmallSort
 
             Span<T> backupSrc = _srcBuf.Slice(_srcPos, n);
             Span<T> backupDst = _dstBuf.Slice(_dstPos, n);
-            var leftMerge = new BranchlessMergeState<T>(
-                _srcBuf.Slice(_srcPos, 2 * k), _dstBuf.Slice(_dstPos, 2 * k));
-            var rightMerge = new BranchlessMergeState<T>(
-                _srcBuf.Slice(_srcPos + 2 * k, 2 * k), _dstBuf.Slice(_dstPos + 2 * k, 2 * k));
+            // See FinalMergeFromDstInto: the shared GlideMerge.BranchlessMergeState.
+            Span<T> curSrc = _srcBuf.Slice(_srcPos, n);
+            Span<T> curDst = _dstBuf.Slice(_dstPos, n);
+            var leftMerge = new GlideMerge.BranchlessMergeState<T>(
+                curSrc.Slice(0, k), curSrc.Slice(k, k), curDst.Slice(0, 2 * k));
+            var rightMerge = new GlideMerge.BranchlessMergeState<T>(
+                curSrc.Slice(2 * k, k), curSrc.Slice(3 * k, k), curDst.Slice(2 * k));
             for (int i = 0; i < k; i++)
             {
                 leftMerge.MergeOneAtBegin(cmp);
@@ -309,72 +317,10 @@ internal static class GlideSmallSort
         }
     }
 
-    /// <summary>Minimal port of BranchlessMergeState (branchless_merge.rs:96-303) — the
-    /// disjoint symmetric-merge subset small_sort.rs uses (new_disjoint plus the four
-    /// one-at-a-time ops; only the unguarded Copy-type variants apply in C#). left and
-    /// right are adjacent halves of one buffer [left | right]; dst is disjoint from both.
-    /// Indices are plain ints so they may cross for a bad comparison operator, exactly as
-    /// upstream's raw pointers do; all reads/writes stay inside the two spans regardless.</summary>
-    private ref struct BranchlessMergeState<T>
-    {
-        private readonly Span<T> _src;  // [left | right], len 2k
-        private readonly Span<T> _dst;  // len 2k
-        private int _leftBegin, _leftEnd;
-        private int _rightBegin, _rightEnd;
-        private int _dstBegin, _dstEnd;
-
-        /// <summary>new_disjoint (branchless_merge.rs:132-140): left = src[0..k], right = src[k..2k].</summary>
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal BranchlessMergeState(Span<T> src, Span<T> dst)
-        {
-            int k = src.Length >> 1;
-            _src = src;
-            _dst = dst;
-            _leftBegin = 0;
-            _leftEnd = k;
-            _rightBegin = k;
-            _rightEnd = src.Length;
-            _dstBegin = 0;
-            _dstEnd = dst.Length;
-        }
-
-        /// <summary>branchless_merge_one_at_begin (branchless_merge.rs:176-196): merge the
-        /// smaller of left/right's front element to dst's front (ties towards left).</summary>
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal void MergeOneAtBegin<TC>(TC cmp) where TC : struct, IIsLess<T>
-        {
-            // Upstream note: adding 1 and subtracting right_less gave significantly faster
-            // codegen than adding !right_less. Kept as (1 - rightLess) increments.
-            ref T s = ref MemoryMarshal.GetReference(_src);
-            ref T d = ref MemoryMarshal.GetReference(_dst);
-            int lb = _leftBegin, rb = _rightBegin;
-            bool rightLess = cmp.IsLess(in Unsafe.Add(ref s, rb), in Unsafe.Add(ref s, lb));
-            Unsafe.Add(ref d, _dstBegin) = rightLess ? Unsafe.Add(ref s, rb) : Unsafe.Add(ref s, lb);
-            _dstBegin++;
-            _leftBegin = lb + (rightLess ? 0 : 1);
-            _rightBegin = rb + (rightLess ? 1 : 0);
-        }
-
-        /// <summary>branchless_merge_one_at_end (branchless_merge.rs:229-245): merge the
-        /// larger of left/right's back element to dst's back (ties towards right).</summary>
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal void MergeOneAtEnd<TC>(TC cmp) where TC : struct, IIsLess<T>
-        {
-            ref T s = ref MemoryMarshal.GetReference(_src);
-            ref T d = ref MemoryMarshal.GetReference(_dst);
-            int le = _leftEnd, re = _rightEnd;
-            bool rightLess = cmp.IsLess(in Unsafe.Add(ref s, re - 1), in Unsafe.Add(ref s, le - 1));
-            _dstEnd--;
-            Unsafe.Add(ref d, _dstEnd) = rightLess ? Unsafe.Add(ref s, le - 1) : Unsafe.Add(ref s, re - 1);
-            _leftEnd = le - (rightLess ? 1 : 0);
-            _rightEnd = re - (rightLess ? 0 : 1);
-        }
-
-        /// <summary>symmetric_merge_successful (branchless_merge.rs:280-284): left_begin ==
-        /// left_end implies right is exhausted too; only an invalid comparison operator
-        /// can violate this.</summary>
-        internal bool SymmetricMergeSuccessful => _leftBegin == _leftEnd;
-    }
+    /// <summary>BranchlessMergeState lives in GlideMerge.cs as the single shared port of
+    /// branchless_merge.rs (upstream small_sort.rs and physical_merges.rs import the same
+    /// type); this file's FinalMergeFromDstInto / DoubleMergeFromSrcToDst construct it
+    /// with the two adjacent src halves as left/right runs.</summary>
 
     /// <summary>BlockInserter (small_sort.rs:308-349): inserts the sorted run src into el
     /// through a moving hole that starts directly after the sorted prefix (el[sortedLen]).
