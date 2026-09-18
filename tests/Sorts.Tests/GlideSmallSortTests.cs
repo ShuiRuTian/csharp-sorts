@@ -84,4 +84,32 @@ public class GlideSmallSortTests
         GlideSmallSort.Sort<string, ComparableCmp<string>>(a, new());
         Assert.Equal(expected, a);
     }
+
+    [Fact]
+    public void SortNIntoRejectsWrongLengths()
+    {
+        // Upstream enforces src.len() == N and dst.len() == N (assert at
+        // small_sort.rs:122; MutSlice typestate elsewhere) — the port rejects
+        // violations with ArgumentException instead of reading/writing out of contract.
+        var src = DataGen.Ints(Distribution.Random, 32, 5);
+        var dst = new int[32];
+        var scratch = new int[64];
+
+        // dst too long (scattered-write hazard) and src too short (overread hazard).
+        Assert.Throws<ArgumentException>(() =>
+            GlideSmallSort.Sort8Into<int, ComparableCmp<int>>(src.AsSpan(0, 8), dst.AsSpan(0, 16), scratch, new()));
+        Assert.Throws<ArgumentException>(() =>
+            GlideSmallSort.Sort8Into<int, ComparableCmp<int>>(src.AsSpan(0, 4), dst.AsSpan(0, 8), scratch, new()));
+        Assert.Throws<ArgumentException>(() =>
+            GlideSmallSort.Sort16Into<int, ComparableCmp<int>>(src.AsSpan(0, 16), dst.AsSpan(0, 15), scratch, new()));
+        Assert.Throws<ArgumentException>(() =>
+            GlideSmallSort.Sort32Into<int, ComparableCmp<int>>(src.AsSpan(0, 31), dst.AsSpan(0, 32), scratch, new()));
+        Assert.Throws<ArgumentException>(() =>
+            GlideSmallSort.Sort4Into<int, ComparableCmp<int>>(src.AsSpan(0, 4), dst.AsSpan(0, 5), scratch, new()));
+
+        // Exact lengths still sort correctly through the guarded entries.
+        var expected = src.OrderBy(x => x).ToArray();
+        GlideSmallSort.Sort32Into<int, ComparableCmp<int>>(src.AsSpan(0, 32), dst.AsSpan(0, 32), scratch, new());
+        Assert.Equal(expected, dst);
+    }
 }

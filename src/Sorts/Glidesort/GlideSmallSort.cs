@@ -60,26 +60,36 @@ internal static class GlideSmallSort
         Unsafe.Add(ref dstp, 3) = max;
     }
 
-    /// <summary>sort4_into (small_sort.rs:245-259): sorts src[0..4] into dst[0..4] via scratch.</summary>
+    /// <summary>sort4_into (small_sort.rs:245-259): sorts src[0..4] into dst[0..4] via scratch.
+    /// Contract (upstream typestate/assert): src and dst must be exactly 4 elements; scratch at least 4.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static void Sort4Into<T, TC>(Span<T> src, Span<T> dst, Span<T> scratch, TC cmp) where TC : struct, IIsLess<T>
     {
+        if (src.Length != 4 || dst.Length != 4)
+            ThrowLengthContract(nameof(src), src.Length, nameof(dst), dst.Length, 4);
         Sort4Raw(ref MemoryMarshal.GetReference(src), ref MemoryMarshal.GetReference(scratch), cmp);
         scratch.Slice(0, 4).CopyTo(dst);
     }
 
-    /// <summary>sort8_into (small_sort.rs:261-271): sorts src[0..8] into dst[0..8]; scratch len &gt;= 8.</summary>
+    /// <summary>sort8_into (small_sort.rs:261-271): sorts src into dst via a 4-group network plus
+    /// final merge. Contract (upstream assert at small_sort.rs:122, dst.len() == N): src and dst must
+    /// be exactly 8 elements; scratch at least 8.</summary>
     internal static void Sort8Into<T, TC>(Span<T> src, Span<T> dst, Span<T> scratch, TC cmp) where TC : struct, IIsLess<T>
     {
+        if (src.Length != 8 || dst.Length != 8)
+            ThrowLengthContract(nameof(src), src.Length, nameof(dst), dst.Length, 8);
         var sort = new Pow2SmallSort<T>(src, scratch.Slice(0, 8));
         sort.SortGroupsOfFourFromSrcToDst(8, cmp);
         sort.FinalMergeFromDstInto(8, dst, cmp);
     }
 
-    /// <summary>sort16_into (small_sort.rs:273-286): sorts src[0..16] into dst[0..16]; scratch len &gt;= 32
+    /// <summary>sort16_into (small_sort.rs:273-286): sorts src into dst via 4-group network, double
+    /// merge, final merge. Contract: src and dst must be exactly 16 elements; scratch at least 32
     /// (upstream splits scratch at 16 — the second half is the ping-pong buffer).</summary>
     internal static void Sort16Into<T, TC>(Span<T> src, Span<T> dst, Span<T> scratch, TC cmp) where TC : struct, IIsLess<T>
     {
+        if (src.Length != 16 || dst.Length != 16)
+            ThrowLengthContract(nameof(src), src.Length, nameof(dst), dst.Length, 16);
         var sort = new Pow2SmallSort<T>(src, scratch.Slice(0, 16));
         sort.SortGroupsOfFourFromSrcToDst(16, cmp);
         sort.SetNewDst(scratch.Slice(16, 16));
@@ -87,9 +97,13 @@ internal static class GlideSmallSort
         sort.FinalMergeFromDstInto(16, dst, cmp);
     }
 
-    /// <summary>sort32_into (small_sort.rs:288-304): sorts src[0..32] into dst[0..32]; scratch len &gt;= 64.</summary>
+    /// <summary>sort32_into (small_sort.rs:288-304): sorts src into dst via 4-group network, two
+    /// double merges, swap, final double merge, final merge. Contract: src and dst must be exactly
+    /// 32 elements; scratch at least 64.</summary>
     internal static void Sort32Into<T, TC>(Span<T> src, Span<T> dst, Span<T> scratch, TC cmp) where TC : struct, IIsLess<T>
     {
+        if (src.Length != 32 || dst.Length != 32)
+            ThrowLengthContract(nameof(src), src.Length, nameof(dst), dst.Length, 32);
         var sort = new Pow2SmallSort<T>(src, scratch.Slice(0, 32));
         sort.SortGroupsOfFourFromSrcToDst(32, cmp);
         sort.SetNewDst(scratch.Slice(32, 32));
@@ -99,6 +113,14 @@ internal static class GlideSmallSort
         sort.DoubleMergeFromSrcToDst(32, cmp);
         sort.FinalMergeFromDstInto(32, dst, cmp);
     }
+
+    /// <summary>assert_abort (upstream util.rs): argument-contract failure aborts. Mirrors the
+    /// upstream asserts that MutSlice typestate usually makes unrepresentable (dst.len() == N,
+    /// src.len() == N — small_sort.rs:122, 62-70).</summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void ThrowLengthContract(string srcName, int srcLen, string dstName, int dstLen, int n) =>
+        throw new ArgumentException(
+            $"{srcName}.Length ({srcLen}) or {dstName}.Length ({dstLen}) violates the length contract: both must be exactly {n}.");
 
     /// <summary>partial_sort_into (small_sort.rs:361-415): sorts the largest pow2 chunk of src
     /// (32/16/8/4/2/1 elements) into dst and returns the chunk length. dst len must be
@@ -170,7 +192,8 @@ internal static class GlideSmallSort
     /// <summary>Pow2SmallSort (small_sort.rs:55-243): helper for sorting small 2^n sized
     /// arrays, ping-ponging between a source and a destination buffer. The Rust Drop impl
     /// is panic-recovery only (success paths forget self), so it has no C# port; an
-    /// exception from cmp leaves the buffers partially sorted. Buffers are tracked as
+    /// exception from cmp leaves the buffers in an unspecified state where elements may be
+    /// duplicated or lost (copies out of one side are not undone). Buffers are tracked as
     /// (buffer, position) pairs — cur_src = _srcBuf[_srcPos..], cur_dst = _dstBuf[_dstPos..]
     /// — with both buffers exactly the full N elements, mirroring MutSlice begin/end.</summary>
     private ref struct Pow2SmallSort<T>
