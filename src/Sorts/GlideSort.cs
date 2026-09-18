@@ -5,9 +5,8 @@ using System.Collections.Generic;
 
 namespace Sorts;
 
-/// <summary>GlideSort — robust generic stable adaptive sort. The kernel (the SortSpan
-/// implementation) lands in a later task; until then every Sort overload that reaches
-/// the kernel throws NotImplementedException.</summary>
+/// <summary>GlideSort — robust generic stable adaptive sort (the powersort-driven
+/// merge-tree port of orlp/glidesort).</summary>
 public static class GlideSort
 {
     /// <summary>Sorts the entire array in ascending order using T's CompareTo.</summary>
@@ -44,9 +43,36 @@ public static class GlideSort
 
     /// <summary>Sorts the span using a struct IComparer adapter (JIT-specialized).</summary>
     public static void Sort<T, TC>(Span<T> span, TC cmp) where TC : struct, IComparer<T>
-        => throw new NotImplementedException(); // TODO(task-6/10/13): wire adapter
+        => SortSpan<T, ComparerAdapter<T, TC>>(span, scratch: default, new ComparerAdapter<T, TC>(cmp));
 
-    /// <summary>THE kernel each algorithm task implements.</summary>
+    /// <summary>THE kernel each algorithm task implements — the full upstream glidesort()
+    /// (glidesort.rs:203-265) via GlidesortImpl. Scratch sizing follows glidesort_alloc_size
+    /// (lib.rs:64-70): when sorting N elements we allocate a buffer of at most size N, N/2
+    /// or N/8 depending on how large the data is, and never less than SMALL_SORT.</summary>
     internal static void SortSpan<T, TC>(Span<T> v, Span<T> scratch, TC cmp) where TC : struct, IIsLess<T>
-        => throw new NotImplementedException();
+    {
+        if (v.Length < 2) return;
+        int alloc = GlidesortAllocSize<T>(v.Length);
+        if (scratch.Length < alloc)
+            scratch = GC.AllocateUninitializedArray<T>(alloc);
+        GlidesortImpl.Sort(v, scratch, cmp, eagerSmallsort: false);
+    }
+
+    // lib.rs:24-27 — when sorting N elements we allocate a buffer of at most size N,
+    // N/2 or N/8 depending on how large the data is.
+    private const int FullAllocMaxBytes = 1024 * 1024;
+    private const int HalfAllocMaxBytes = 1024 * 1024 * 1024;
+
+    /// <summary>glidesort_alloc_size (lib.rs:64-70): full_allowed = min(n, 1MiB/sizeOf),
+    /// half_allowed = min(n/2, 1GiB/sizeOf), eighth = n/8, max'ed with SMALL_SORT so the
+    /// SMALL_SORT sanity fallback in glidesort() is unreachable.</summary>
+    internal static int GlidesortAllocSize<T>(int n)
+    {
+        int tlen = System.Runtime.CompilerServices.Unsafe.SizeOf<T>();
+        int fullAllowed = Math.Min(n, FullAllocMaxBytes / tlen);
+        int halfAllowed = Math.Min(n / 2, HalfAllocMaxBytes / tlen);
+        int eighthAllowed = n / 8;
+        int m = Math.Max(fullAllowed, halfAllowed);
+        return Math.Max(Math.Max(m, eighthAllowed), GlideSmallSort.SmallSort);
+    }
 }
