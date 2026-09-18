@@ -4,3 +4,4 @@ obj/
 artifacts/
 *.user
 BenchmarkDotNet.Artifacts/
+.gstack/
