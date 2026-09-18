@@ -27,8 +27,8 @@ internal static class DriftSmallSort
     /// (len + 17 for len &lt;= 32).</summary>
     internal const int MinSmallSortScratchLen = 50;
 
-    /// <summary>Upstream SMALL_SORT_THRESHOLD (smallsort.rs:28 default, :54 Freeze):
-    /// 32 for Freeze-like T, else 16.</summary>
+    /// <summary>Upstream SMALL_SORT_THRESHOLD (smallsort.rs:28 default, :54 Freeze impl
+    /// — Freeze-only, no size bound): 32 for Freeze-like T, else 16.</summary>
     internal static int Threshold<T>() => SmallSortConfig<T>.IsFreezeLike ? 32 : 16;
 
     /// <summary>sort_small (smallsort.rs:20-24 dispatch; :30-45 default impl;
@@ -301,16 +301,17 @@ internal static class DriftSmallSort
         throw new InvalidOperationException("Ord violation");
 }
 
-/// <summary>SmallSortTypeImpl type dispatch (smallsort.rs:16-64): Freeze-like types take
-/// the optimized network with SMALL_SORT_THRESHOLD = 32, everything else insertion sort
-/// with threshold 16. Upstream's Freeze auto-trait (lib.rs:153-160, no interior mutability)
-/// maps to C# value types containing no managed references; this config additionally
-/// bounds the network path to types of at most 16 bytes, which also covers exactly the
-/// const size_of branch inside sort_small_general (smallsort.rs:88).</summary>
+/// <summary>SmallSortTypeImpl type dispatch (smallsort.rs:16-64): Freeze types take the
+/// optimized network with SMALL_SORT_THRESHOLD = 32, everything else insertion sort with
+/// threshold 16. Upstream's dispatch is Freeze-only with no size bound (smallsort.rs:50
+/// `impl&lt;T: crate::Freeze&gt;`); its Freeze auto-trait (lib.rs:153-160, no interior
+/// mutability) maps to C# value types containing no managed references. The const
+/// size_of branch inside sort_small_general (smallsort.rs:88) only selects the sort8 vs
+/// sort4 presort within the network — it is not part of the dispatch.</summary>
 internal static class SmallSortConfig<T>
 {
     /// <summary>Whether T qualifies for sort_small_general; otherwise SortSmall falls
     /// back to insertion_sort_shift_left.</summary>
     internal static readonly bool IsFreezeLike =
-        typeof(T).IsValueType && Unsafe.SizeOf<T>() <= 16 && !RuntimeHelpers.IsReferenceOrContainsReferences<T>();
+        typeof(T).IsValueType && !RuntimeHelpers.IsReferenceOrContainsReferences<T>();
 }

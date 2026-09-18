@@ -27,14 +27,33 @@ public class DriftSmallSortTests
     [Fact]
     public void ThresholdIs32ForFreezeLikeAnd16Otherwise()
     {
-        // Freeze-like (smallsort.rs:50-54): value type, <= 16 bytes, no managed refs.
+        // Freeze-like (smallsort.rs:50-54, Freeze-only with no size bound): any value
+        // type without managed references, including >16-byte unmanaged structs.
         Assert.Equal(32, DriftSmallSort.Threshold<int>());
         Assert.Equal(32, DriftSmallSort.Threshold<Pair>());
-        // Default impl (smallsort.rs:27-28): reference types, ref-containing or
-        // oversized structs.
+        Assert.Equal(32, DriftSmallSort.Threshold<BigStruct>());
+        // Default impl (smallsort.rs:27-28): reference types and ref-containing structs.
         Assert.Equal(16, DriftSmallSort.Threshold<string>());
-        Assert.Equal(16, DriftSmallSort.Threshold<BigStruct>());
         Assert.Equal(16, DriftSmallSort.Threshold<RefStruct>());
+    }
+
+    [Fact]
+    public void SortSmallNetworkPathHandlesBigUnmanagedStructs()
+    {
+        // >16-byte unmanaged structs stay on the sort_small_general network path
+        // (Freeze-only upstream dispatch) with threshold 32; the inner size_of branch
+        // degrades them to the sort4 presort (smallsort.rs:88, 99-104).
+        var scratch = new BigStruct[DriftSmallSort.MinSmallSortScratchLen];
+        for (int n = 0; n <= 32; n++)
+        {
+            var rng = new Random(n + 41);
+            var a = new BigStruct[n];
+            for (int i = 0; i < n; i++)
+                a[i] = new BigStruct(rng.Next(30), i, 0, 0, 0);
+            var expected = a.OrderBy(x => x.A).ToArray();
+            DriftSmallSort.SortSmall<BigStruct, ComparableCmp<BigStruct>>(a, scratch, new());
+            Assert.Equal(expected, a);
+        }
     }
 
     [Fact]
