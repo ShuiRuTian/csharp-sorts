@@ -80,19 +80,25 @@ public static class DriftSort
         // allocation fits; otherwise allocate on the heap.
         if (scratch.Length < allocLen)
         {
-            var buf = ScratchCache<T>.Buffer;
-            if (buf is null)
+            if (allocLen <= StackScratchLen)
             {
-                ScratchCache<T>.Buffer = buf = new T[StackScratchLen];
+                var buf = ScratchCache<T>.Buffer;
+                if (buf is null)
+                {
+                    ScratchCache<T>.Buffer = buf = new T[StackScratchLen];
+                }
+                scratch = buf;
             }
-            scratch = allocLen <= StackScratchLen ? buf : GC.AllocateUninitializedArray<T>(allocLen);
+            else
+            {
+                scratch = GC.AllocateUninitializedArray<T>(allocLen);
+            }
         }
 
-        // Upstream selects eager mode for len <= SMALL_SORT_THRESHOLD * 2
-        // (lib.rs:104-107); the port's public entry always uses the lazy mode,
-        // matching the glidesort port's eagerSmallsort: false ruling — the eager
-        // machinery remains reachable through DriftQuicksort's limit-0 fallback.
-        DriftImpl.Sort(v, scratch, eagerSort: false, cmp);
+        // For small inputs using quicksort is not yet beneficial, and a single
+        // small-sort or two small-sorts plus a single merge outperforms it, so use
+        // eager mode (lib.rs:104-108).
+        DriftImpl.Sort(v, scratch, eagerSort: v.Length <= DriftSmallSort.Threshold<T>() * 2, cmp);
     }
 
     private const int StackScratchLen = 512;

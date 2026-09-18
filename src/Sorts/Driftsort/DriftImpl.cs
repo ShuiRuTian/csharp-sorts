@@ -7,9 +7,8 @@
 //  - merge_tree_scale_factor / merge_tree_depth (drift.rs:123-172) are reused from
 //    Powersort (Task 10) — identical math in both upstream files.
 //  - upstream's MaybeUninit<[DriftsortRun; 66]> + [u8; 66] run stack becomes two
-//    per-call arrays plus stackLen (the glidesort MergeStack house pattern); C#
-//    arrays are always initialized and the one-time zero-fill of 66 slots is
-//    negligible.
+//    stackalloc'd spans plus stackLen — RunState is a single ulong, so 66 slots fit
+//    comfortably on the stack, matching upstream's stack storage (drift.rs:46-49).
 //  - DriftsortRun(usize) becomes RunState below with the same (len << 1) | sorted
 //    bitfield (drift.rs:306-331).
 using System;
@@ -20,8 +19,8 @@ namespace Sorts;
 /// <summary>The driftsort() main loop (drift.rs:16-121): a 66-slot run stack driven by
 /// powersort's desired-merge-depth heuristic decides when to logically merge runs.
 /// eagerSort selects upstream's O(N log N) eager mode (only small-sorts and physical
-/// merges); the public entry passes false (DriftSort.SortSpan) and DriftQuicksort's
-/// limit-0 fallback carries its own eager seam.</summary>
+/// merges); DriftSort.SortSpan passes it for len &lt;= Threshold&lt;T&gt;() * 2 (lib.rs:104-108)
+/// and DriftQuicksort's limit-0 fallback carries its own eager seam.</summary>
 internal static class DriftImpl
 {
     private const int MinSqrtRunLen = 64;
@@ -51,8 +50,8 @@ internal static class DriftImpl
         // (stackLen, runs, desiredDepths) together form a stack maintaining run
         // information for the powersort heuristic. desiredDepths[i] is the desired
         // depth of the merge node that merges runs[i] with the run after it.
-        var runs = new RunState[RunStackCapacity];
-        var desiredDepths = new byte[RunStackCapacity];
+        Span<RunState> runs = stackalloc RunState[RunStackCapacity];
+        Span<byte> desiredDepths = stackalloc byte[RunStackCapacity];
         int stackLen = 0;
 
         int scanIdx = 0;
