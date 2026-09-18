@@ -2,6 +2,7 @@
 // C# port 2026 — architecture-faithful, C# performance idioms.
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 
 namespace Sorts;
 
@@ -62,8 +63,10 @@ public static class QuadSort
     public static void Sort<T, TC>(Span<T> span, TC cmp) where TC : struct, IComparer<T>
         => throw new NotImplementedException(); // TODO(task-6/10/13): wire adapter
 
-    /// <summary>THE kernel each algorithm task implements. Task 4 scope: n &lt; 32 via the
-    /// small-sort machinery (tail_swap/tiny_sort); n ≥ 32 lands in Task 5.</summary>
+    /// <summary>THE kernel each algorithm task implements. n &lt; 32: small-sort machinery
+    /// (tail_swap/tiny_sort). n ≥ 32: quad_swap analyzer, then quad_merge + tail_merge
+    /// per upstream quadsort() (quadsort.c:1065-1085); swap_size = nmemb makes every
+    /// merge fit scratch, so rotate_merge (Task 6) is not yet needed.</summary>
     internal static void SortSpan<T, TC>(Span<T> v, Span<T> scratch, TC cmp) where TC : struct, IIsLess<T>
     {
         if (v.Length < 32)
@@ -71,6 +74,16 @@ public static class QuadSort
             QuadsortImpl.TailSwap(v, scratch.Length >= v.Length ? scratch : SmallScratch<T>(), cmp);
             return;
         }
-        throw new NotImplementedException(); // TODO(task-5): quad_swap + quad_merge kernel
+
+        int nmemb = v.Length;
+        Span<T> swap = scratch.Length >= nmemb ? scratch : GC.AllocateUninitializedArray<T>(nmemb);
+        Debug.Assert(swap.Length >= nmemb);
+
+        if (QuadsortImpl.QuadSwap(v, swap, cmp) == 0)
+        {
+            int block = QuadsortImpl.QuadMerge(v, swap, nmemb, nmemb, 32, cmp);
+            QuadsortImpl.TailMerge(v, swap, nmemb, nmemb, block, cmp);
+        }
+        // QuadSwap returned 1: the array was one descending run — already sorted.
     }
 }
