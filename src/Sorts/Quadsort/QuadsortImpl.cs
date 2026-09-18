@@ -1017,4 +1017,296 @@ internal static partial class QuadsortImpl
             block *= 2;
         }
     }
+
+    // ---- the next four functions provide in-place rotate merge support (quadsort.c:788) ----
+
+    /// <summary>trinity_rotation (quadsort.c:790-928): left-rotate a[0..nmemb) by leftLen
+    /// ([left|right] → [right|left]) using swap as an auxiliary buffer when a side fits;
+    /// otherwise three bulk-swap loops (bridge tricks). Buffer use is capped at 65536
+    /// elements, exactly as upstream. Scratch contract: swap.Length ≥ swapSize.</summary>
+    internal static void TrinityRotation<T, TC>(Span<T> a, Span<T> swap, int swapSize, int nmemb, int leftLen, TC cmp) where TC : struct, IIsLess<T>
+    {
+        if (swapSize > 65536)
+        {
+            swapSize = 65536;
+        }
+
+        ref var r = ref MemoryMarshal.GetReference(a);
+        int right = nmemb - leftLen;
+        T temp;
+
+        if (leftLen < right)
+        {
+            if (leftLen <= swapSize)
+            {
+                a.Slice(0, leftLen).CopyTo(swap);
+                a.Slice(leftLen, right).CopyTo(a.Slice(0, right));
+                swap.Slice(0, leftLen).CopyTo(a.Slice(right, leftLen));
+            }
+            else
+            {
+                int bridge = right - leftLen; // ptb = array + leftLen
+
+                if (bridge <= swapSize && bridge > 3)
+                {
+                    int ptb = leftLen, ptc = right, ptd = nmemb; // ptc = pta + right, ptd = ptc + leftLen
+
+                    a.Slice(ptb, bridge).CopyTo(swap);
+
+                    for (int cnt = leftLen; cnt-- > 0; ) // while (left--)
+                    {
+                        ptc--; ptd--; Unsafe.Add(ref r,ptc) = Unsafe.Add(ref r,ptd);
+                        ptb--; Unsafe.Add(ref r,ptd) = Unsafe.Add(ref r,ptb);
+                    }
+                    swap.Slice(0, bridge).CopyTo(a.Slice(0, bridge));
+                }
+                else
+                {
+                    int pta = 0, ptb = leftLen, ptc = leftLen, ptd = nmemb; // ptc = ptb, ptd = ptc + right
+
+                    for (int cnt = leftLen / 2; cnt-- > 0; )
+                    {
+                        temp = Unsafe.Add(ref r,ptb - 1); ptb--;
+                        Unsafe.Add(ref r,ptb) = Unsafe.Add(ref r,pta);
+                        Unsafe.Add(ref r,pta) = Unsafe.Add(ref r,ptc); pta++;
+                        ptd--; Unsafe.Add(ref r,ptc) = Unsafe.Add(ref r,ptd); ptc++;
+                        Unsafe.Add(ref r,ptd) = temp;
+                    }
+
+                    for (int cnt = (ptd - ptc) / 2; cnt-- > 0; )
+                    {
+                        temp = Unsafe.Add(ref r,ptc);
+                        ptd--; Unsafe.Add(ref r,ptc) = Unsafe.Add(ref r,ptd); ptc++;
+                        Unsafe.Add(ref r,ptd) = Unsafe.Add(ref r,pta);
+                        Unsafe.Add(ref r,pta) = temp; pta++;
+                    }
+
+                    for (int cnt = (ptd - pta) / 2; cnt-- > 0; )
+                    {
+                        temp = Unsafe.Add(ref r,pta);
+                        ptd--; Unsafe.Add(ref r,pta) = Unsafe.Add(ref r,ptd); pta++;
+                        Unsafe.Add(ref r,ptd) = temp;
+                    }
+                }
+            }
+        }
+        else if (right < leftLen)
+        {
+            if (right <= swapSize)
+            {
+                a.Slice(leftLen, right).CopyTo(swap);
+                a.Slice(0, leftLen).CopyTo(a.Slice(right, leftLen));
+                swap.Slice(0, right).CopyTo(a.Slice(0, right));
+            }
+            else
+            {
+                int bridge = leftLen - right; // ptb = array + leftLen
+
+                if (bridge <= swapSize && bridge > 3)
+                {
+                    int pta = 0, ptb = leftLen, ptc = right, ptd = nmemb; // ptc = pta + right, ptd = ptc + leftLen
+
+                    a.Slice(ptc, bridge).CopyTo(swap);
+
+                    for (int cnt = right; cnt-- > 0; ) // while (right--)
+                    {
+                        Unsafe.Add(ref r,ptc) = Unsafe.Add(ref r,pta); ptc++;
+                        Unsafe.Add(ref r,pta) = Unsafe.Add(ref r,ptb); pta++; ptb++;
+                    }
+                    swap.Slice(0, bridge).CopyTo(a.Slice(ptd - bridge, bridge));
+                }
+                else
+                {
+                    int pta = 0, ptb = leftLen, ptc = leftLen, ptd = nmemb; // ptc = ptb, ptd = ptc + right
+
+                    for (int cnt = right / 2; cnt-- > 0; )
+                    {
+                        temp = Unsafe.Add(ref r,ptb - 1); ptb--;
+                        Unsafe.Add(ref r,ptb) = Unsafe.Add(ref r,pta);
+                        Unsafe.Add(ref r,pta) = Unsafe.Add(ref r,ptc); pta++;
+                        ptd--; Unsafe.Add(ref r,ptc) = Unsafe.Add(ref r,ptd); ptc++;
+                        Unsafe.Add(ref r,ptd) = temp;
+                    }
+
+                    for (int cnt = (ptb - pta) / 2; cnt-- > 0; )
+                    {
+                        temp = Unsafe.Add(ref r,ptb - 1); ptb--;
+                        Unsafe.Add(ref r,ptb) = Unsafe.Add(ref r,pta);
+                        ptd--; Unsafe.Add(ref r,pta) = Unsafe.Add(ref r,ptd); pta++;
+                        Unsafe.Add(ref r,ptd) = temp;
+                    }
+
+                    for (int cnt = (ptd - pta) / 2; cnt-- > 0; )
+                    {
+                        temp = Unsafe.Add(ref r,pta);
+                        ptd--; Unsafe.Add(ref r,pta) = Unsafe.Add(ref r,ptd); pta++;
+                        Unsafe.Add(ref r,ptd) = temp;
+                    }
+                }
+            }
+        }
+        else // leftLen == right
+        {
+            int pta = 0, ptb = leftLen;
+
+            for (int cnt = leftLen; cnt-- > 0; ) // while (left--)
+            {
+                temp = Unsafe.Add(ref r,pta);
+                Unsafe.Add(ref r,pta) = Unsafe.Add(ref r,ptb); pta++;
+                Unsafe.Add(ref r,ptb) = temp; ptb++;
+            }
+        }
+    }
+
+    /// <summary>monobound_binary_first (quadsort.c:930-953): index of the first element of
+    /// array[0..top) that is ≥ value (a branchless lower-bound binary search). Requires
+    /// top ≥ 1.</summary>
+    internal static int MonoboundBinaryFirst<T, TC>(Span<T> array, ref T value, int top, TC cmp) where TC : struct, IIsLess<T>
+    {
+        ref var r = ref MemoryMarshal.GetReference(array);
+        int end = top;
+
+        while (top > 1)
+        {
+            int mid = top / 2;
+
+            if (!cmp.IsLess(in Unsafe.Add(ref r, end - mid), in value)) // cmp(value, end - mid) <= 0
+            {
+                end -= mid;
+            }
+            top -= mid;
+        }
+
+        if (!cmp.IsLess(in Unsafe.Add(ref r, end - 1), in value)) // cmp(value, end - 1) <= 0
+        {
+            end--;
+        }
+        return end;
+    }
+
+    /// <summary>rotate_merge_block (quadsort.c:955-1021): in-place merge of the two sorted
+    /// runs a[0..lblockLen) and a[lblockLen..lblockLen+rightLen). Recursively halves the
+    /// left run, rotates the out-of-order middle out of the way (trinity_rotation), then
+    /// finishes with partial merges when a side fits swap. Scratch contract: swap.Length ≥
+    /// swapSize.</summary>
+    internal static void RotateMergeBlock<T, TC>(Span<T> a, Span<T> swap, int swapSize, int lblockLen, int rightLen, TC cmp) where TC : struct, IIsLess<T>
+    {
+        if (LeAt(ref MemoryMarshal.GetReference(a), lblockLen - 1, lblockLen, cmp))
+        {   // cmp(array + lblock - 1, array + lblock) <= 0: runs already ordered
+            return;
+        }
+
+        int rblock = lblockLen / 2;
+        int lblock = lblockLen - rblock;
+
+        int left = MonoboundBinaryFirst(a.Slice(lblock + rblock), ref Unsafe.Add(ref MemoryMarshal.GetReference(a), lblock), rightLen, cmp);
+
+        rightLen -= left;
+
+        // [ lblock ] [ rblock ] [ left ] [ right ]
+
+        if (left != 0)
+        {
+            if (lblock + left <= swapSize)
+            {
+                a.Slice(0, lblock).CopyTo(swap);
+                a.Slice(lblock + rblock, left).CopyTo(swap.Slice(lblock));
+                a.Slice(lblock, rblock).CopyTo(a.Slice(lblock + left));
+
+                CrossMerge(a, swap, lblock, left, cmp);
+            }
+            else
+            {
+                TrinityRotation(a.Slice(lblock), swap, swapSize, rblock + left, rblock, cmp);
+
+                bool unbalanced = (2L * left < lblock) | (2L * lblock < left);
+
+                if (unbalanced && left <= swapSize)
+                {
+                    PartialBackwardMerge(a, swap, swapSize, lblock + left, lblock, cmp);
+                }
+                else if (unbalanced && lblock <= swapSize)
+                {
+                    PartialForwardMerge(a, swap, swapSize, lblock + left, lblock, cmp);
+                }
+                else
+                {
+                    RotateMergeBlock(a, swap, swapSize, lblock, left, cmp);
+                }
+            }
+        }
+
+        if (rightLen != 0)
+        {
+            bool unbalanced = (2L * rightLen < rblock) | (2L * rblock < rightLen);
+
+            if ((unbalanced && rightLen <= swapSize) || rightLen + rblock <= swapSize)
+            {
+                PartialBackwardMerge(a.Slice(lblock + left), swap, swapSize, rblock + rightLen, rblock, cmp);
+            }
+            else if (unbalanced && rblock <= swapSize)
+            {
+                PartialForwardMerge(a.Slice(lblock + left), swap, swapSize, rblock + rightLen, rblock, cmp);
+            }
+            else
+            {
+                RotateMergeBlock(a.Slice(lblock + left), swap, swapSize, rblock, rightLen, cmp);
+            }
+        }
+    }
+
+    /// <summary>rotate_merge (quadsort.c:1023-1052): bottom-up pass loop over
+    /// rotate_merge_block, used when quad_merge ran out of scratch. Block/pta arithmetic
+    /// is kept in long to mirror upstream size_t (no int overflow on huge arrays).
+    /// Scratch contract: swap.Length ≥ swapSize.</summary>
+    internal static void RotateMerge<T, TC>(Span<T> a, Span<T> swap, int swapSize, int nmemb, int block, TC cmp) where TC : struct, IIsLess<T>
+    {
+        // block <= nmemb guards upstream's size_t wrap: nmemb - block underflows to a
+        // huge value (condition false) when block > nmemb — the array is already merged.
+        if (nmemb <= 2L * block && block <= nmemb && nmemb - block <= swapSize)
+        {
+            PartialBackwardMerge(a, swap, swapSize, nmemb, block, cmp);
+
+            return;
+        }
+
+        long blk = block;
+
+        while (blk < nmemb)
+        {
+            for (long pta = 0; pta + blk < nmemb; pta += blk * 2)
+            {
+                if (pta + blk * 2 < nmemb)
+                {
+                    RotateMergeBlock(a.Slice((int)pta), swap, swapSize, (int)blk, (int)blk, cmp);
+
+                    continue;
+                }
+                RotateMergeBlock(a.Slice((int)pta), swap, swapSize, (int)blk, (int)(nmemb - pta - blk), cmp);
+
+                break;
+            }
+            blk *= 2;
+        }
+    }
+
+    /// <summary>quadsort_swap (quadsort.c:1102-1117): sort a through a caller-provided
+    /// scratch buffer, falling back to rotate_merge when the buffer cannot hold the
+    /// merge. nmemb comes from a.Length. Scratch contract: swap.Length ≥ swapSize and
+    /// swap.Length ≥ a.Length when a.Length ≤ 96.</summary>
+    internal static void QuadsortWithScratch<T, TC>(Span<T> a, Span<T> swap, int swapSize, TC cmp) where TC : struct, IIsLess<T>
+    {
+        int nmemb = a.Length;
+
+        if (nmemb <= 96)
+        {
+            TailSwap(a, swap, cmp);
+        }
+        else if (QuadSwap(a, swap, cmp) == 0)
+        {
+            int block = QuadMerge(a, swap, swapSize, nmemb, 32, cmp);
+
+            RotateMerge(a, swap, swapSize, nmemb, block, cmp);
+        }
+    }
 }

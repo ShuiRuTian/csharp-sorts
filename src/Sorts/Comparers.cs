@@ -30,3 +30,14 @@ internal readonly struct ComparisonCmp<T> : IIsLess<T>
     public ComparisonCmp(Comparison<T> cmp) => _cmp = cmp;
     public bool IsLess(in T x, in T y) => _cmp(x, y) < 0;
 }
+
+/// <summary>Adapts a struct IComparer&lt;T&gt; to the IIsLess kernel contract — the
+/// JIT-specialized public entry shared by all three algorithms' Sort&lt;T,TC&gt; overloads.</summary>
+internal readonly struct ComparerAdapter<T, TC> : IIsLess<T> where TC : struct, IComparer<T>
+{
+    private readonly TC _c;
+    public ComparerAdapter(TC c) => _c = c;
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    public bool IsLess(in T x, in T y) => _c.Compare(x, y) < 0;
+}

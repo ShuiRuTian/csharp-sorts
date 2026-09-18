@@ -61,12 +61,14 @@ public static class QuadSort
 
     /// <summary>Sorts the span using a struct IComparer adapter (JIT-specialized).</summary>
     public static void Sort<T, TC>(Span<T> span, TC cmp) where TC : struct, IComparer<T>
-        => throw new NotImplementedException(); // TODO(task-6/10/13): wire adapter
+        => SortSpan<T, ComparerAdapter<T, TC>>(span, scratch: default, new ComparerAdapter<T, TC>(cmp));
 
-    /// <summary>THE kernel each algorithm task implements. n &lt; 32: small-sort machinery
-    /// (tail_swap/tiny_sort). n ≥ 32: quad_swap analyzer, then quad_merge + tail_merge
-    /// per upstream quadsort() (quadsort.c:1065-1085); swap_size = nmemb makes every
-    /// merge fit scratch, so rotate_merge (Task 6) is not yet needed.</summary>
+    /// <summary>THE kernel each algorithm task implements — the full upstream quadsort()
+    /// (quadsort.c:1065-1099). n &lt; 32: small-sort machinery (tail_swap/tiny_sort).
+    /// n ≥ 32: quad_swap analyzer, then quad_merge + rotate_merge. The scratch is
+    /// swap_size = nmemb, capped by the 4 MiB growth loop for huge arrays; on allocation
+    /// failure a 512-element buffer mirrors upstream's stack[512] fallback, which forces
+    /// the rotate_merge path.</summary>
     internal static void SortSpan<T, TC>(Span<T> v, Span<T> scratch, TC cmp) where TC : struct, IIsLess<T>
     {
         if (v.Length < 32)
@@ -75,15 +77,36 @@ public static class QuadSort
             return;
         }
 
-        int nmemb = v.Length;
-        Span<T> swap = scratch.Length >= nmemb ? scratch : GC.AllocateUninitializedArray<T>(nmemb);
-        Debug.Assert(swap.Length >= nmemb);
-
-        if (QuadsortImpl.QuadSwap(v, swap, cmp) == 0)
+        // upstream quad_swap uses its own stack scratch[32]
+        if (QuadsortImpl.QuadSwap(v, scratch.Length >= 32 ? scratch : SmallScratch<T>(), cmp) != 0)
         {
-            int block = QuadsortImpl.QuadMerge(v, swap, nmemb, nmemb, 32, cmp);
-            QuadsortImpl.TailMerge(v, swap, nmemb, nmemb, block, cmp);
+            return; // the array was one descending run — already sorted
         }
-        // QuadSwap returned 1: the array was one descending run — already sorted.
+
+        int nmemb = v.Length;
+        int swapSize = nmemb;
+
+        if (nmemb > 4194304)
+        {
+            for (swapSize = 4194304; 8L * swapSize <= nmemb; swapSize *= 4) { }
+        }
+
+        Span<T> swap;
+        try
+        {
+            swap = scratch.Length >= swapSize ? scratch : GC.AllocateUninitializedArray<T>(swapSize);
+        }
+        catch (OutOfMemoryException)
+        {
+            // upstream: VAR stack[512]; the 512-element buffer forces rotate_merge
+            var stack = new T[512];
+            int block = QuadsortImpl.QuadMerge(v, stack, 512, nmemb, 32, cmp);
+            QuadsortImpl.RotateMerge(v, stack, 512, nmemb, block, cmp);
+            return;
+        }
+        Debug.Assert(swap.Length >= swapSize);
+
+        int blk = QuadsortImpl.QuadMerge(v, swap, swapSize, nmemb, 32, cmp);
+        QuadsortImpl.RotateMerge(v, swap, swapSize, nmemb, blk, cmp);
     }
 }

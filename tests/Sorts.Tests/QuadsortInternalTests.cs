@@ -58,4 +58,24 @@ public class QuadsortInternalTests
         Assert.Equal(1, ret);
         Assert.Equal(Enumerable.Range(1, n), a);
     }
+
+    // Task 6: rotate_merge fallback — 64-element scratch forces rotate_merge for deep merges.
+
+    [Fact]
+    public void RotateMergePathSortsCorrectlyWithTinyScratch()
+    {
+        var a = DataGen.Ints(Distribution.Random, 5000, 42);
+        var expected = a.OrderBy(x => x).ToArray();
+        QuadsortImpl.QuadsortWithScratch<int, ComparableCmp<int>>(a, new int[64], 64, new());
+        Assert.Equal(expected, a);
+    }
+
+    [Fact]
+    public void RotateMergePathSortsCorrectlyWithTinyScratchRandomD20()
+    {
+        var a = DataGen.Ints(Distribution.RandomD20, 5000, 43);
+        var expected = a.OrderBy(x => x).ToArray();
+        QuadsortImpl.QuadsortWithScratch<int, ComparableCmp<int>>(a, new int[64], 64, new());
+        Assert.Equal(expected, a);
+    }
 }
