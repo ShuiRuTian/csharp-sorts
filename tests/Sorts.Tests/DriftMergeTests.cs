@@ -13,9 +13,13 @@ public class DriftMergeTests
     [InlineData(500, 500)]
     [InlineData(1, 999)]
     [InlineData(999, 1)]
+    [InlineData(600, 400)]
     public void MergeMergesSortedHalves(int l, int r)
     {
-        // scratch >= v.Length - v.Length / 2 — the upstream contract.
+        // scratch >= v.Length - v.Length / 2 — the upstream contract. The left run
+        // (Random) holds the large values and the right (RandomD20) the small ones:
+        // (600, 400) makes the backward merge_down exhaust the left run first, so the
+        // Drain remainder (merge.rs:124-136) copies a long saved tail into v's front.
         int total = l + r;
         var v = new int[total];
         SortedRun(Distribution.Random, l, 7).CopyTo(v, 0);
