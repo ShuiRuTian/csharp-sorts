@@ -19,18 +19,18 @@
 
 ## 2. 结果速览
 
-环境：Apple M3 Pro（Arm64）、.NET 10.0.5、单线程、Workstation GC、BenchmarkDotNet 0.15.4 默认精度（2026-09-19 实测）。数据为 `CoreMatrixBench` 全矩阵中 `int[]` 的结果；比值为**算法耗时 ÷ `Array.Sort<T>(T[])` 耗时**，< 1.00 即快于 `Array.Sort`。完整矩阵（12 分布 × 3 规模 × 4 方法）见 `benchmarks/results/`。
+环境：Apple M3 Pro（Arm64）、.NET 10.0.5、单线程、Workstation GC、BenchmarkDotNet 0.15.4 默认精度（2026-09-19 性能修复波 cc4f50e 之后实测）。数据为 `CoreMatrixBench` 全矩阵中 `int[]` 的结果；比值为**算法耗时 ÷ `Array.Sort<T>(T[])` 耗时**，< 1.00 即快于 `Array.Sort`。完整矩阵（12 分布 × 3 规模 × 4 方法）见 `benchmarks/results/`。
 
 **速度比值**（耗时 ÷ `Array.Sort<T>(T[])`，越低越快）：
 
 | 分布 \ 规模 | QuadSort 100k | QuadSort 1M | GlideSort 100k | GlideSort 1M | DriftSort 100k | DriftSort 1M |
 |---|---:|---:|---:|---:|---:|---:|
-| Random（全随机）        | 1.63 | 1.57 | 2.58 | 2.58 | 1.43 | 1.42 |
-| Ascending（升序）       | **0.26** | **0.07** | **0.16** | **0.10** | **0.17** | **0.10** |
-| RandomD20（值域 0..20） | 1.78 | 1.75 | 2.46 | 2.39 | 1.13 | 1.10 |
-| Zipfian（重尾）         | 2.02 | 1.75 | 2.92 | 2.43 | 1.27 | 1.13 |
+| Random（全随机）        | 1.65 | 1.61 | 1.79 | 1.81 | 1.43 | 1.40 |
+| Ascending（升序）       | **0.26** | **0.07** | **0.15** | **0.10** | **0.10** | **0.07** |
+| RandomD20（值域 0..20） | 1.81 | 1.68 | **0.97** | 1.35 | 1.09 | 1.08 |
+| Zipfian（重尾）         | 1.93 | 1.78 | 1.43 | 1.42 | 1.23 | 1.13 |
 
-`Array.Sort<T>(T[])` 绝对耗时（随机 int）：100k ≈ 3.44 ms，1M ≈ 43.9 ms。
+`Array.Sort<T>(T[])` 绝对耗时（随机 int）：100k ≈ 3.45 ms，1M ≈ 43.8 ms。
 
 **分配对比**（每次排序的托管分配；`Array.Sort` 内省排序原地完成，零分配）：
 
@@ -45,24 +45,24 @@
 
 **怎么读这些数字**（诚实结论）：
 
-- **全随机 int 上我们输了**：DriftSort 慢 ~1.4x、QuadSort ~1.6x、GlideSort ~2.6x。`Array.Sort` 的内省排序原地完成、零 scratch、零拷贝；三个稳定自适应排序为换来自适应与重复值处理，付出 O(n) scratch 分配 + 全量拷贝带宽的代价（见上表分配对比）。这是设计使然（上游 Rust 版同样需要 scratch），不是移植缺陷。
-- **自适应模式大胜**：升序 0.07–0.26x（**快 4–14 倍**）、OrganPipe 0.04–0.06x（**最大自适应胜幅**）、Sawtooth 0.20–0.41x、RandomS95/RandomTail 0.27–0.65x（Quad/Drift ~0.3x）、AllEqual/Descending 0.05–0.18x。数据越有结构，赢得越多。
-- **重复值**：RandomD20 上 DriftSort 1.10–1.13x（基本持平），Zipfian 1.13–1.27x；GlideSort/QuadSort 在 1.75–2.9x。
+- **全随机 int 上我们输了，但差距收窄**：DriftSort 慢 ~1.4x、QuadSort ~1.6x、GlideSort ~1.8x（性能修复波前 GlideSort 为 ~2.6x）。`Array.Sort` 的内省排序原地完成、零 scratch、零拷贝；三个稳定自适应排序为换来自适应与重复值处理，付出 O(n) scratch 分配 + 全量拷贝带宽的代价（见上表分配对比）。这是设计使然（上游 Rust 版同样需要 scratch），不是移植缺陷。
+- **自适应模式大胜**：升序 0.07–0.26x（**快 4–14 倍**）、OrganPipe 0.03–0.07x（**最大自适应胜幅**，1M 时 DriftSort 0.03x = 快 30 倍）、Sawtooth 0.16–0.38x、RandomS95/RandomTail 0.27–0.45x、AllEqual/Descending 0.04–0.18x。数据越有结构，赢得越多。
+- **重复值：修复波后多个格子反超 `Array.Sort`**：RandomD20 100k 上 GlideSort **0.97x**；RandomP5（95% 重复）上 DriftSort **0.59x–0.66x**、GlideSort/QuadSort ~0.94–1.02x（打平）；FewUnique（4 个不同值）上 DriftSort **0.78–0.91x**、GlideSort **0.92–0.96x**；Zipfian 上 DriftSort 1.13–1.23x。
 - **规模越大差距越稳**：1M 与 100k 的比值基本一致（缓存效应被 O(n) 主导摊平）。
-- **规模扩展**（随机 int，1k → 10M）：`ScalingBench` 显示从 32k 起三算法与 `Array.Sort` 的比值进入平台期——DriftSort 稳定在 ~1.4–1.5x、QuadSort ~1.6–1.7x、GlideSort ~2.5–2.7x，直到 10M 无恶化（10M 时 DriftSort 1.46x）。8k 附近 DriftSort 一度达到 0.87x。1k–2k 的小数组上三算法明显劣势（~1.6–20x，最差 1k FewUnique 达 35x），与上游"小输入用插入排序"的取舍一致——小数组不值得复杂算法，但此时 `Array.Sort` 的内联插入排序更快。
-- **`Array.Sort` 基准动物园**（int Random 100k）：`ArraySort_Generic` 3.43 ms；`IComparer` 入口 3.99 ms（+16%，接口税）；`Comparison` 委托入口 5.34 ms（+56%，委托税）；`Linq_OrderBy`（稳定参照）5.74 ms + 1.5 MB 分配。即 DriftSort（5.04 ms）已快于 `Array.Sort` 的 `Comparison` 委托入口与 LINQ OrderBy，QuadSort（5.83 ms）与 LINQ 相当——**同为稳定排序时，DriftSort 胜出**。
+- **规模扩展**（随机 int，1k → 10M）：`ScalingBench` 显示从 16k 起三算法与 `Array.Sort` 的比值进入平台期——DriftSort 稳定在 ~1.4x、QuadSort ~1.6x、GlideSort ~1.8x，直到 10M 无恶化（10M 时 DriftSort 1.45x）。8k 附近 DriftSort 达到 **0.97x**（与 `Array.Sort` 打平）。1k–2k 的小数组上三算法明显劣势（~1.7–22x，最差 1k RandomP5 GlideSort 达 27x、1k FewUnique 达 17x），与上游"小输入用插入排序"的取舍一致——小数组不值得复杂算法，但此时 `Array.Sort` 的内联插入排序更快。
+- **`Array.Sort` 基准动物园**（int Random 100k）：`ArraySort_Generic` 3.65 ms；`IComparer` 入口 4.12 ms（+13%，接口税）；`Comparison` 委托入口 5.56 ms（+52%，委托税）；`Linq_OrderBy`（稳定参照）5.83 ms + 1.5 MB 分配。即 DriftSort（4.93 ms）已快于 `Array.Sort` 的 `Comparison` 委托入口与 LINQ OrderBy，QuadSort（5.78 ms）与 LINQ 相当，GlideSort（6.31 ms）逼近——**同为稳定排序时，DriftSort 胜出**。
 
 **类型矩阵**（100k，vs `Array.Sort<T>(T[])`；引用类型 `string[]` 走接口虚调用，与 `Array.Sort` 同级开销）：
 
 | 类型 \ Random比值 | DriftSort | GlideSort | QuadSort | 备注 |
 |---|---:|---:|---:|---|
-| int        | 1.46x | 2.67x | 1.63x | |
-| double     | 1.42x | 2.26x | 1.62x | |
-| Struct16   | 1.70x | 2.65x | 1.81x | 16 字节值类型 |
-| Struct128  | 1.73x | 2.58x | 1.95x | 大元素：拷贝代价放大 |
-| string     | **1.21x** | 1.37x | 1.19x | 接口调用主导，差距缩小 |
+| int        | 1.42x | 1.77x | 1.66x | |
+| double     | 1.39x | 1.69x | 1.53x | |
+| Struct16   | 1.73x | 2.32x | 1.80x | 16 字节值类型 |
+| Struct128  | 1.72x | 1.67x | 1.95x | 大元素：拷贝代价放大 |
+| string     | 1.18x | **1.11x** | 1.19x | 接口调用主导，差距缩小 |
 
-`string[]` 的结构化模式差距同样收窄甚至反超：Zipfian 上 DriftSort **0.63x**、GlideSort **0.85x**（快于 `Array.Sort`）；RandomD20 上 DriftSort **0.77x**。Struct128 的 D20/S95/Zipfian 上 DriftSort 也以 0.54–1.03x 胜出。元素越大、比较越贵、数据越有结构，移植的相对优势越明显。
+`string[]` 的结构化模式差距同样收窄甚至反超：Zipfian 上 DriftSort **0.63x**、GlideSort **0.65x**（快于 `Array.Sort`）；RandomD20 上 DriftSort **0.76x**、GlideSort **0.81x**。Struct128 的 D20/S95/Zipfian 上 GlideSort 以 0.56–1.02x、DriftSort 以 0.51–1.08x 胜出居多。元素越大、比较越贵、数据越有结构，移植的相对优势越明显。`string[]` 数字较修复波前的提升来自 A2：`IsFreezeLike` 扩宽到引用类型（Rust `Freeze` 含 `String`/`&T`/`Box`），使 `string[]` 走小排序网络而非插入排序。
 
 ## 3. 三算法说明与移植要点
 
@@ -146,3 +146,4 @@ dotnet test tests/Sorts.Tests
 - **不做 `Sort<TKey,TValue>(keys, items)` 键值对重载**：设计文档明确的非目标，列为验证成立后的后续项（见 `docs/superpowers/specs/2026-09-18-csharp-sorts-design.md`）。
 - **`ThreadStatic` 小缓冲的重入性注意**：上游 Rust 的 4096 字节小缓冲存于**调用栈**（每次调用独立）；C# 端以每-(T, 线程) 的 `ThreadStatic` 512 元素缓冲代替（懒初始化）。若自定义比较器回调在同一线程上递归调用同一 `T` 的排序、且外层规模小到用该缓冲，内层会覆写外层正在使用的 scratch 导致数据损坏。数组足够大时 scratch 走堆分配、每次调用独立，无此问题。请勿在比较器中递归排序同一 `T`。
 - **eager-smallsort A/B 未做**：上游对"先完整小排序再归并"vs"边扫边合"的取舍做过基准 A/B；本端口直接沿用上游结论，未在 .NET 上复测该 A/B。
+- **eager 回退路径丢失 run 检测与 powersort 合并序**：递归深度限制耗尽的罕见最坏情况路径上，本端口把区间切成固定宽度的 run 做朴素两两归并；上游在该路径仍调用完整 eager 主循环（含 `find_existing_run` 与 powersort 合并树）。输出仍正确且稳定，仅该罕见路径的自适应性与合并次序偏离上游。

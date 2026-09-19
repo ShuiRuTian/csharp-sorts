@@ -10,12 +10,12 @@ Platform=Arm64  Force=False  Server=False
 InvocationCount=64  UnrollFactor=1  
 
 ```
-| Method               | Dist   | N      | Mean     | Error     | StdDev    | P90      | Ratio | RatioSD | Gen0    | Gen1    | Gen2    | Allocated | Alloc Ratio |
-|--------------------- |------- |------- |---------:|----------:|----------:|---------:|------:|--------:|--------:|--------:|--------:|----------:|------------:|
-| ArraySort_IComparer  | Random | 100000 | 3.994 ms | 0.0219 ms | 0.0183 ms | 4.014 ms |  1.17 |    0.01 |       - |       - |       - |      64 B |          NA |
-| ArraySort_Comparison | Random | 100000 | 5.336 ms | 0.0374 ms | 0.0292 ms | 5.363 ms |  1.56 |    0.01 |       - |       - |       - |         - |          NA |
-| Linq_OrderBy         | Random | 100000 | 5.742 ms | 0.0984 ms | 0.0872 ms | 5.846 ms |  1.68 |    0.02 | 31.2500 | 31.2500 | 31.2500 | 1600380 B |          NA |
-| ArraySort_Generic    | Random | 100000 | 3.428 ms | 0.0114 ms | 0.0095 ms | 3.441 ms |  1.00 |    0.00 |       - |       - |       - |         - |          NA |
-| QuadSort             | Random | 100000 | 5.833 ms | 0.1158 ms | 0.1505 ms | 5.974 ms |  1.70 |    0.04 |       - |       - |       - |  400024 B |          NA |
-| GlideSort            | Random | 100000 | 9.167 ms | 0.0390 ms | 0.0346 ms | 9.212 ms |  2.67 |    0.01 |       - |       - |       - |  401160 B |          NA |
-| DriftSort            | Random | 100000 | 5.044 ms | 0.0986 ms | 0.1476 ms | 5.207 ms |  1.47 |    0.04 |       - |       - |       - |  400024 B |          NA |
+| Method               | Dist   | N      | Mean     | Error     | StdDev    | Median   | P90      | Ratio | RatioSD | Gen0    | Gen1    | Gen2    | Allocated | Alloc Ratio |
+|--------------------- |------- |------- |---------:|----------:|----------:|---------:|---------:|------:|--------:|--------:|--------:|--------:|----------:|------------:|
+| ArraySort_IComparer  | Random | 100000 | 4.122 ms | 0.0824 ms | 0.1282 ms | 4.052 ms | 4.276 ms |  1.13 |    0.04 |       - |       - |       - |      64 B |          NA |
+| ArraySort_Comparison | Random | 100000 | 5.557 ms | 0.0926 ms | 0.0866 ms | 5.520 ms | 5.664 ms |  1.52 |    0.04 |       - |       - |       - |         - |          NA |
+| Linq_OrderBy         | Random | 100000 | 5.834 ms | 0.0665 ms | 0.0590 ms | 5.837 ms | 5.900 ms |  1.60 |    0.04 | 31.2500 | 31.2500 | 31.2500 | 1600380 B |          NA |
+| ArraySort_Generic    | Random | 100000 | 3.647 ms | 0.0617 ms | 0.0845 ms | 3.614 ms | 3.734 ms |  1.00 |    0.03 |       - |       - |       - |         - |          NA |
+| QuadSort             | Random | 100000 | 5.784 ms | 0.0667 ms | 0.0557 ms | 5.791 ms | 5.834 ms |  1.59 |    0.04 |       - |       - |       - |  400024 B |          NA |
+| GlideSort            | Random | 100000 | 6.309 ms | 0.0466 ms | 0.0413 ms | 6.313 ms | 6.336 ms |  1.73 |    0.04 |       - |       - |       - |  401160 B |          NA |
+| DriftSort            | Random | 100000 | 4.930 ms | 0.0359 ms | 0.0280 ms | 4.933 ms | 4.947 ms |  1.35 |    0.03 |       - |       - |       - |  400024 B |          NA |
