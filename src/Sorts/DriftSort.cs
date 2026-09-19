@@ -49,7 +49,10 @@ public static class DriftSort
     /// (i-cache friendliness); larger inputs compute the scratch allocation policy
     /// max(max(len/2, min(len, 8MB/sizeOf)), MinSmallSortScratchLen), prefer a
     /// per-(T, thread) 512-element buffer standing in for upstream's 4096-byte stack
-    /// storage, and enter DriftImpl's powersort main loop in lazy mode.</summary>
+    /// storage, and call DriftImpl.Sort with eagerSort = len &lt;= Threshold&lt;T&gt;() * 2 —
+    /// per lib.rs:104-108, inputs fitting one or two small-sorts plus a single merge
+    /// beat the quicksort path, so those run eager (small-sort + merge) rather than
+    /// entering the powersort main loop immediately.</summary>
     internal static void SortSpan<T, TC>(Span<T> v, Span<T> scratch, TC cmp) where TC : struct, IIsLess<T>
     {
         // More advanced sorting methods than insertion sort are faster if called in a

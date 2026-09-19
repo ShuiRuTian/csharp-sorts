@@ -11,7 +11,9 @@ namespace Sorts.Benchmarks;
 /// <c>InvocationCount</c> unsorted clones of the template into this ring, and every
 /// invocation sorts <c>Next()</c>, the current ring slot.
 ///
-/// Fresh-data invariant math (InvocationCount = OperationsPerInvoke = RingSize = 64):
+/// Fresh-data invariant math (InvocationCount = RingSize = 64, OperationsPerInvoke = 1
+/// — one sort per invocation; BDN 0.15.4 computes total ops as InvocationCount ×
+/// OperationsPerInvoke, see MatrixBase.cs):
 /// one benchmark iteration is exactly 64 invocations; the cursor advances by one per
 /// invocation, so the ring wraps ONLY at a full batch boundary and each clone is
 /// sorted exactly once per 64-invocation batch. When the cursor wraps, every slot is

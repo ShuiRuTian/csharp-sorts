@@ -38,7 +38,7 @@
 |---|---:|---:|---|
 | `Array.Sort<T>(T[])` | 0 B | 0 B | 原地内省排序，无 scratch |
 | QuadSort | ~400 KB | ~4 MB | 全量 n 的归并 scratch（Descending 走原地翻转路径，0 B） |
-| GlideSort | ~401 KB | ~2 MB | 上游 `glidesort_alloc_size`：8MB 上限内取 n，超限取 n/2 |
+| GlideSort | ~401 KB | ~2 MB | 上游 `glidesort_alloc_size` 分档：max(n≤1MiB/元素大小, n/2≤1GiB/元素大小, n/8)，下限 SMALL_SORT——100k 取满 n，1M 取 n/2 |
 | DriftSort | ~400 KB | ~4 MB | 上游 scratch 策略 `max(n/2, min(n, 8MB/元素大小))` |
 
 即：三者的自适应与重复值处理能力以 O(n) 级 scratch 缓冲 + 相应的拷贝带宽为代价——这是设计使然（上游同理），不是移植缺陷；但 .NET 侧 `Array.Sort` 的零分配原地内省排序把这个差距摆在了明面上。
@@ -49,7 +49,7 @@
 - **自适应模式大胜**：升序 0.07–0.26x（**快 4–14 倍**）、OrganPipe 0.03–0.07x（**最大自适应胜幅**，1M 时 DriftSort 0.03x = 快 30 倍）、Sawtooth 0.16–0.38x、RandomS95/RandomTail 0.27–0.45x、AllEqual/Descending 0.04–0.18x。数据越有结构，赢得越多。
 - **重复值：修复波后多个格子反超 `Array.Sort`**：RandomD20 100k 上 GlideSort **0.97x**；RandomP5（95% 重复）上 DriftSort **0.59x–0.66x**、GlideSort/QuadSort ~0.94–1.02x（打平）；FewUnique（4 个不同值）上 DriftSort **0.78–0.91x**、GlideSort **0.92–0.96x**；Zipfian 上 DriftSort 1.13–1.23x。
 - **规模越大差距越稳**：1M 与 100k 的比值基本一致（缓存效应被 O(n) 主导摊平）。
-- **规模扩展**（随机 int，1k → 10M）：`ScalingBench` 显示从 16k 起三算法与 `Array.Sort` 的比值进入平台期——DriftSort 稳定在 ~1.4x、QuadSort ~1.6x、GlideSort ~1.8x，直到 10M 无恶化（10M 时 DriftSort 1.45x）。8k 附近 DriftSort 达到 **0.97x**（与 `Array.Sort` 打平）。1k–2k 的小数组上三算法明显劣势（~1.7–22x，最差 1k RandomP5 GlideSort 达 27x、1k FewUnique 达 17x），与上游"小输入用插入排序"的取舍一致——小数组不值得复杂算法，但此时 `Array.Sort` 的内联插入排序更快。
+- **规模扩展**（随机 int，1k → 10M）：`ScalingBench` 显示从 16k 起三算法与 `Array.Sort` 的比值进入平台期——DriftSort 稳定在 ~1.4x、QuadSort ~1.6x、GlideSort ~1.8x，直到 10M 无恶化（10M 时 DriftSort 1.45x）。8k 附近 DriftSort 达到 **0.97x**（与 `Array.Sort` 打平）。1k–2k 的小数组上三算法明显劣势（1k 全分布最差 18.2–26.8x：GlideSort RandomP5 26.8x、QuadSort RandomD20 20.3x、DriftSort Random 18.2x；2k 随机降至 1.7–6.8x），与上游"小输入用插入排序"的取舍一致——小数组不值得复杂算法，但此时 `Array.Sort` 的内联插入排序更快。
 - **`Array.Sort` 基准动物园**（int Random 100k）：`ArraySort_Generic` 3.65 ms；`IComparer` 入口 4.12 ms（+13%，接口税）；`Comparison` 委托入口 5.56 ms（+52%，委托税）；`Linq_OrderBy`（稳定参照）5.83 ms + 1.5 MB 分配。即 DriftSort（4.93 ms）已快于 `Array.Sort` 的 `Comparison` 委托入口与 LINQ OrderBy，QuadSort（5.78 ms）与 LINQ 相当，GlideSort（6.31 ms）逼近——**同为稳定排序时，DriftSort 胜出**。
 
 **类型矩阵**（100k，vs `Array.Sort<T>(T[])`；引用类型 `string[]` 走接口虚调用，与 `Array.Sort` 同级开销）：
@@ -64,6 +64,8 @@
 
 `string[]` 的结构化模式差距同样收窄甚至反超：Zipfian 上 DriftSort **0.63x**、GlideSort **0.65x**（快于 `Array.Sort`）；RandomD20 上 DriftSort **0.76x**、GlideSort **0.81x**。Struct128 的 D20/S95/Zipfian 上 GlideSort 以 0.56–1.02x、DriftSort 以 0.51–1.08x 胜出居多。元素越大、比较越贵、数据越有结构，移植的相对优势越明显。`string[]` 数字较修复波前的提升来自 A2：`IsFreezeLike` 扩宽到引用类型（Rust `Freeze` 含 `String`/`&T`/`Box`），使 `string[]` 走小排序网络而非插入排序。
 
+**Pair 键值结构**（`Pair` = 8 字节 `(int Key, int Payload)` 只读记录，Random 100k，`PairBench` 实测，2026-09-19）：`Array.Sort<T>(T[])` 3.68 ms 基准下 DriftSort 5.28 ms（**1.43x**）、QuadSort 5.83 ms（1.58x）、GlideSort 8.01 ms（**2.18x**）。与裸 `int[]`（1.35–1.73x）对照：DriftSort/QuadSort 基本持平，GlideSort 差距放大（1.73x → 2.18x）；三者的 scratch 分配各 ~800 KB（n × 8 字节）。同为稳定排序的 `Linq_OrderBy` 5.77 ms（1.57x）+ 2.4 MB 分配——**DriftSort 在键值结构上仍快于 LINQ OrderBy**，QuadSort 与之打平，GlideSort 此处落后。
+
 ## 3. 三算法说明与移植要点
 
 **DriftSort**（上游 [sort-research-rs/driftsort](https://github.com/Voultapher/sort-research-rs)，Rust）——面向未来的稳定通用排序：小输入用插入排序（i-cache 友好），大输入先做一次"drift"扫描识别已有顺序结构，再用 quicksort 分区 + powersort 合并树调度归并。对真实世界数据（部分有序、大量重复）自适应能力最强。
@@ -75,14 +77,14 @@
 **移植要点**（架构忠实 + C# 性能惯用法）：
 
 - **branchless 比较映射**：上游 Rust 用 `T: Ord` 单态化出无分支比较；C# 侧以 `IIsLess<T>` 结构体接口 + 值类型 comparer（`ComparableCmp<T>` 等）让 JIT 特化并内联，`where TC : struct` 约束消除接口虚分派。
-- **scratch 策略**：DriftSort 沿用上游"最多 len/2、且不超过 8MB/元素大小"的临时缓冲策略，上游的 4096 字节栈存储换成每-(T, 线程) 512 元素 `ThreadStatic` 缓冲，超出部分堆分配；QuadSort 以 64 元素 `ThreadStatic` 小缓冲服务 n < 32 路径（稳态零分配）；GlideSort 按上游 `glidesort_alloc_size` 每次调用堆分配。`Sort<T,TC>(Span<T>, TC)` 内核均可由调用方自带 scratch。
+- **scratch 策略**：DriftSort 沿用上游"最多 len/2、且不超过 8MB/元素大小"的临时缓冲策略，上游的 4096 字节栈存储换成每-(T, 线程) 512 元素 `ThreadStatic` 缓冲，超出部分堆分配；QuadSort 以 64 元素 `ThreadStatic` 小缓冲服务 n < 32 路径（稳态零分配）；GlideSort n < 48 直接小排序网络原地完成零分配，需求 ≤ 512 元素时走每-(T, 线程) `ThreadStatic` 缓冲，之上按上游 `glidesort_alloc_size` 公式 `GC.AllocateUninitializedArray` 堆分配。`Sort<T,TC>(Span<T>, TC)` 内核均可由调用方自带 scratch。
 - **类型特化 codegen**：.NET 泛型即上游的 Rust 单态化等价物——`Sort<T, TC>` 每个值类型组合独立 JIT，比较器内联后与上游 `#[inline]` 同效。
 - **跳过项**：`gap_guard`（上游检测 scratch 与输入重叠的保护——C# 端 scratch 独立分配，重叠不可能发生，故跳过）；`tracking.rs` 调试设施（上游专用断言基建，不影响正确性路径）；WASM 目标路径（.NET 无对应物）；powersort 深度数学共享为 internal `Powersort` 类。
 - Benchmark 工程注记：BenchmarkDotNet 0.15.4 移除了独立的 `[OperationsPerInvoke]` 特性（改为 `[Benchmark]` 的属性，总操作数 = InvocationCount × OperationsPerInvoke），矩阵基准因此显式设置 `InvocationCount`。
 
 ## 4. Benchmark 方法论
 
-- **矩阵**：`CoreMatrixBench`（12 分布 × {1k, 100k, 1M} × 4 方法，`int[]`）；`TypeMatrixBench`（{int, double, string, Struct16, Struct128} × {Random, RandomD20, RandomS95, Zipfian} × 100k）；`ScalingBench`（1k → 10M 随机 `int[]` 12 个规模）；`BaselineBench`/`PairBench`（`Array.Sort` 变体入口与 Pair 键值结构对照）。
+- **矩阵**：`CoreMatrixBench`（12 分布 × {1k, 100k, 1M} × 4 方法，`int[]`）；`TypeMatrixBench`（{int, double, string, Struct16, Struct128} × {Random, RandomD20, RandomS95, Zipfian} × 100k）；`ScalingBench`（1k → 10M 随机 `int[]` 12 个规模）；`BaselineBench`/`PairBench`（`Array.Sort` 变体入口与 Pair 键值结构对照，均已实测）。
 - **分布**：Random、Ascending、Descending、Sawtooth（5 齿）、OrganPipe、RandomD20（值域 0..20）、RandomP5（95% 零 + 5% 随机）、RandomS95（95% 有序 + 5% 随机尾部）、Zipfian（s≈1 重尾）、AllEqual、FewUnique（4 个不同值）、RandomTail（升序 + 末 5% 随机）。
 - **数据新鲜度（ring buffer）**：原地排序会破坏输入，而 `IterationSetup` 每个 iteration 只跑一次（一个 iteration 含多次 invocation），后续 invocation 会在已排序数据上重排——对自适应排序是毒药。方案是 `GlobalSetup` 预生成 64 份未排序克隆进环形缓冲，每次 invocation 排序下一格；游标回卷时全部从不可变模板重拷。不变量数学：InvocationCount = RingSize = 64，环恰在批次边界回卷，每个克隆每批恰被排序一次。重拷成本为每 64 次排序 64 次 `Array.Copy`（内存带宽 vs O(n log n) 比较），占比百分之几，且对所有被测方法一致。
 - **配置**：单 job、Arm64、Workstation GC、不强制 GC（观察真实分配行为而非隐藏它）、MemoryDiagnoser、P90 列、固定种子 20260918。
@@ -91,7 +93,7 @@
 ```bash
 dotnet run -c Release --project benchmarks/Sorts.Benchmarks -- --filter '*CoreMatrixBench*'
 dotnet run -c Release --project benchmarks/Sorts.Benchmarks -- --filter '*TypeMatrixBench*'
-dotnet run -c Release --project benchmarks/Sorts.Benchmarks -- --filter '*ScalingBench*' '*BaselineBench*'   # 多个 glob 空格分隔，'|' 不被支持
+dotnet run -c Release --project benchmarks/Sorts.Benchmarks -- --filter '*ScalingBench*' '*BaselineBench*' '*PairBench*'   # 多个 glob 空格分隔，'|' 不被支持
 ```
 
 完整导出（markdown + csv）在 `benchmarks/results/`。
