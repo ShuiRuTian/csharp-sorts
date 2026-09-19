@@ -46,10 +46,10 @@
 **怎么读这些数字**（诚实结论）：
 
 - **全随机 int 上我们输了**：DriftSort 慢 ~1.4x、QuadSort ~1.6x、GlideSort ~2.6x。`Array.Sort` 的内省排序原地完成、零 scratch、零拷贝；三个稳定自适应排序为换来自适应与重复值处理，付出 O(n) scratch 分配 + 全量拷贝带宽的代价（见上表分配对比）。这是设计使然（上游 Rust 版同样需要 scratch），不是移植缺陷。
-- **自适应模式大胜**：升序 0.07–0.26x（**快 4–14 倍**）、Sawtooth 0.20–0.41x、RandomS95/RandomTail 0.27–0.65x（Quad/Drift ~0.3x）、AllEqual/Descending 0.05–0.18x。数据越有结构，赢得越多。
+- **自适应模式大胜**：升序 0.07–0.26x（**快 4–14 倍**）、OrganPipe 0.04–0.06x（**最大自适应胜幅**）、Sawtooth 0.20–0.41x、RandomS95/RandomTail 0.27–0.65x（Quad/Drift ~0.3x）、AllEqual/Descending 0.05–0.18x。数据越有结构，赢得越多。
 - **重复值**：RandomD20 上 DriftSort 1.10–1.13x（基本持平），Zipfian 1.13–1.27x；GlideSort/QuadSort 在 1.75–2.9x。
 - **规模越大差距越稳**：1M 与 100k 的比值基本一致（缓存效应被 O(n) 主导摊平）。
-- **规模扩展**（随机 int，1k → 10M）：`ScalingBench` 显示从 32k 起三算法与 `Array.Sort` 的比值进入平台期——DriftSort 稳定在 ~1.4–1.5x、QuadSort ~1.6–1.7x、GlideSort ~2.5–2.7x，直到 10M 无恶化（10M 时 DriftSort 1.46x）。8k 附近 DriftSort 一度达到 0.87x。1k–2k 的小数组上三算法明显劣势（1.5–16x），与上游"小输入用插入排序"的取舍一致——小数组不值得复杂算法，但此时 `Array.Sort` 的内联插入排序更快。
+- **规模扩展**（随机 int，1k → 10M）：`ScalingBench` 显示从 32k 起三算法与 `Array.Sort` 的比值进入平台期——DriftSort 稳定在 ~1.4–1.5x、QuadSort ~1.6–1.7x、GlideSort ~2.5–2.7x，直到 10M 无恶化（10M 时 DriftSort 1.46x）。8k 附近 DriftSort 一度达到 0.87x。1k–2k 的小数组上三算法明显劣势（~1.6–20x，最差 1k FewUnique 达 35x），与上游"小输入用插入排序"的取舍一致——小数组不值得复杂算法，但此时 `Array.Sort` 的内联插入排序更快。
 - **`Array.Sort` 基准动物园**（int Random 100k）：`ArraySort_Generic` 3.43 ms；`IComparer` 入口 3.99 ms（+16%，接口税）；`Comparison` 委托入口 5.34 ms（+56%，委托税）；`Linq_OrderBy`（稳定参照）5.74 ms + 1.5 MB 分配。即 DriftSort（5.04 ms）已快于 `Array.Sort` 的 `Comparison` 委托入口与 LINQ OrderBy，QuadSort（5.83 ms）与 LINQ 相当——**同为稳定排序时，DriftSort 胜出**。
 
 **类型矩阵**（100k，vs `Array.Sort<T>(T[])`；引用类型 `string[]` 走接口虚调用，与 `Array.Sort` 同级开销）：
