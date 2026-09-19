@@ -28,12 +28,16 @@ public class DriftSmallSortTests
     public void ThresholdIs32ForFreezeLikeAnd16Otherwise()
     {
         // Freeze-like (smallsort.rs:50-54, Freeze-only with no size bound): any value
-        // type without managed references, including >16-byte unmanaged structs.
+        // type without managed references, including >16-byte unmanaged structs — and
+        // reference types too (Rust's Freeze includes String/&T/Box: a copied C#
+        // reference aliases the same object, so the network's compares-on-copies are
+        // hazard-free for them).
         Assert.Equal(32, DriftSmallSort.Threshold<int>());
         Assert.Equal(32, DriftSmallSort.Threshold<Pair>());
         Assert.Equal(32, DriftSmallSort.Threshold<BigStruct>());
-        // Default impl (smallsort.rs:27-28): reference types and ref-containing structs.
-        Assert.Equal(16, DriftSmallSort.Threshold<string>());
+        Assert.Equal(32, DriftSmallSort.Threshold<string>());
+        // Default impl (smallsort.rs:27-28): value types containing managed
+        // references (conservative — upstream has no such types).
         Assert.Equal(16, DriftSmallSort.Threshold<RefStruct>());
     }
 
@@ -70,13 +74,17 @@ public class DriftSmallSortTests
     [Fact]
     public void SortSmallHandlesReferenceTypeElements()
     {
-        // Reference-type T takes the insertion-sort path (upstream default impl,
-        // threshold 16).
-        var a = DataGen.Strings(Distribution.RandomD20, 16, 7);
-        var expected = a.OrderBy(x => x, StringComparer.Ordinal).ToArray();
+        // Reference-type T takes the network path like upstream (Freeze includes
+        // String: a copied reference aliases the same object) — sweep every size
+        // up to the threshold 32, covering the presort branches.
         var scratch = new string[DriftSmallSort.MinSmallSortScratchLen];
-        DriftSmallSort.SortSmall<string, ComparableCmp<string>>(a, scratch, new());
-        Assert.Equal(expected, a);
+        for (int n = 0; n <= 32; n++)
+        {
+            var a = DataGen.Strings(Distribution.RandomD20, Math.Max(n, 1), n + 7)[..n];
+            var expected = a.OrderBy(x => x, StringComparer.Ordinal).ToArray();
+            DriftSmallSort.SortSmall<string, ComparableCmp<string>>(a, scratch, new());
+            Assert.Equal(expected, a);
+        }
     }
 
     [Fact]

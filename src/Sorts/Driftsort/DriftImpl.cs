@@ -13,6 +13,8 @@
 //    bitfield (drift.rs:306-331).
 using System;
 using System.Numerics;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace Sorts;
 
@@ -194,19 +196,29 @@ internal static class DriftImpl
             return (len, false);
         }
 
+        // Base-ref + rolling-cursor scan (this scan is the whole cost on the
+        // sorted-input path): prev holds v[runLen - 1] throughout, so the loop
+        // condition has no span bounds checks. Run-detection semantics are
+        // unchanged: strictly-descending advances while each element is less than
+        // its predecessor, ascending while not less (ties extend the run).
         int runLen = 2;
-        bool strictlyDescending = cmp.IsLess(v[1], v[0]);
+        ref T vBase = ref MemoryMarshal.GetReference(v);
+        bool strictlyDescending = cmp.IsLess(in Unsafe.Add(ref vBase, 1), in vBase);
         if (strictlyDescending)
         {
-            while (runLen < len && cmp.IsLess(v[runLen], v[runLen - 1]))
+            ref T prev = ref Unsafe.Add(ref vBase, 1);
+            while (runLen < len && cmp.IsLess(in Unsafe.Add(ref prev, 1), in prev))
             {
+                prev = ref Unsafe.Add(ref prev, 1);
                 runLen++;
             }
         }
         else
         {
-            while (runLen < len && !cmp.IsLess(v[runLen], v[runLen - 1]))
+            ref T prev = ref Unsafe.Add(ref vBase, 1);
+            while (runLen < len && !cmp.IsLess(in Unsafe.Add(ref prev, 1), in prev))
             {
+                prev = ref Unsafe.Add(ref prev, 1);
                 runLen++;
             }
         }

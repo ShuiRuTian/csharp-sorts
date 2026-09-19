@@ -304,6 +304,14 @@ internal static class GlideQuicksort
 
     private static void CopyTwoPieceToTwoPiece<T>(TwoPieceSpan<T> src, TwoPieceSpan<T> dst)
     {
+        // Contiguous on both sides (the driver's universal case): one bulk copy
+        // instead of per-element indexer traffic. CopyTo's memmove semantics match
+        // the element-wise forward loop even for overlapping regions.
+        if (src.TryAsContiguousSpan(out Span<T> srcFlat) && dst.TryAsContiguousSpan(out Span<T> dstFlat))
+        {
+            srcFlat.CopyTo(dstFlat);
+            return;
+        }
         int n = src.Length;
         for (int i = 0; i < n; i++)
             dst[i] = src[i];
@@ -565,10 +573,21 @@ internal ref struct BidirPartitionState<T>
 
     /// <summary>partition_bidir_n (stable_quicksort.rs:225-279): n interleaved
     /// forward/backward steps, unrolled by 4. The pivot is a caller-held local (upstream
-    /// moves it out of the array precisely so these writes cannot clobber it).</summary>
+    /// moves it out of the array precisely so these writes cannot clobber it). When the
+    /// four regions collapse to contiguous spans (always inside the driver recursion)
+    /// the burst path below runs; only a genuinely disjoint layout — possible solely
+    /// via the public Partition seam — keeps this per-element path.</summary>
     private void PartitionBidirN<TC>(ref T pivot, TC cmp, bool invert, int n)
         where TC : struct, IIsLess<T>
     {
+        if (ForwardScan.TryAsContiguousSpan(out Span<T> fSpan)
+            && BackwardScan.TryAsContiguousSpan(out Span<T> bSpan)
+            && Dest.TryAsContiguousSpan(out Span<T> destSpan)
+            && Scratch.TryAsContiguousSpan(out Span<T> scratchSpan))
+        {
+            PartitionBidirNBurst(ref pivot, cmp, invert, n, fSpan, bSpan, destSpan, scratchSpan);
+            return;
+        }
         for (int i = 0; i < n >> 2; i++)
         {
             PartitionOneAny(ref pivot, cmp, invert, true);
@@ -585,6 +604,160 @@ internal ref struct BidirPartitionState<T>
             PartitionOneAny(ref pivot, cmp, invert, true);
             PartitionOneAny(ref pivot, cmp, invert, false);
         }
+    }
+
+    /// <summary>The burst inner loop of partition_bidir_n on flattened (contiguous)
+    /// regions: base refs + int cursors, branchless conditional-ref stores and ternary
+    /// counter arithmetic — the DriftQuicksort.PartitionState idiom applied to the
+    /// bidirectional partition. Semantically identical to the per-element path: same
+    /// interleaving, comparison polarity (including invert), cursor updates and
+    /// pivot-element tracking; the region views are split once per batch instead of
+    /// per element. The strict F,B,F,B,... interleaving is preserved exactly — it is
+    /// load-bearing, keeping each direction's write fronts at or behind the other
+    /// direction's scan front in the aliased in-place layout.</summary>
+    private void PartitionBidirNBurst<TC>(ref T pivot, TC cmp, bool invert, int n,
+        Span<T> fSpan, Span<T> bSpan, Span<T> destSpan, Span<T> scratchSpan)
+        where TC : struct, IIsLess<T>
+    {
+        ref T fBase = ref MemoryMarshal.GetReference(fSpan);
+        ref T bBase = ref MemoryMarshal.GetReference(bSpan);
+        ref T destBase = ref MemoryMarshal.GetReference(destSpan);
+        ref T scratchBase = ref MemoryMarshal.GetReference(scratchSpan);
+        int bwdLen = bSpan.Length;
+        int L = fSpan.Length + bwdLen;
+
+        // Pivot-element tracking hoisted to batch level. In the interleaved sequence
+        // F,B,F,B,... the pivot at logical index p of the current concatenation is
+        // consumed by forward step p+1 (step index 2p) when p < n, else by backward
+        // step L-p (step index 2(L-p)-1) when L-p <= n; the ranges are disjoint
+        // because 2n <= min(2*fLen, 2*bLen) <= L always holds. A middle pivot stays
+        // unconsumed: forward steps still decrement its index, by exactly n overall.
+        int p = _pivotRel;
+        int pivotStep = -1;
+        if (p >= 0)
+        {
+            if (p < n) pivotStep = 2 * p;
+            else if (L - p <= n) pivotStep = 2 * (L - p) - 1;
+        }
+
+        // Write heads as running ints: forward writes go to destBase[destFwd]
+        // (less) / scratchBase[scratchFwd] (geq); backward writes to
+        // scratchBase[scratchBwd - 1] (less) / destBase[destBwd - 1] (geq).
+        int destFwd = _numAtDestBegin;
+        int scratchFwd = _scratchFwdIdx - _numAtDestBegin;
+        int scratchBwd = scratchSpan.Length - _numAtScratchEnd;
+        int destBwd = _destBwdIdx + _numAtScratchEnd;
+        int f = 0; // forward scan cursor
+        int b = 0; // backward scan cursor (reads bBase[bwdLen - 1 - b])
+        int step = 0;
+
+        for (int i = 0; i < n >> 2; i++)
+        {
+            BurstForward(ref pivot, cmp, invert, step++, pivotStep, ref fBase, ref destBase, ref scratchBase, ref f, ref destFwd, ref scratchFwd);
+            BurstBackward(ref pivot, cmp, invert, step++, pivotStep, ref bBase, ref destBase, ref scratchBase, bwdLen, ref b, ref destBwd, ref scratchBwd);
+            BurstForward(ref pivot, cmp, invert, step++, pivotStep, ref fBase, ref destBase, ref scratchBase, ref f, ref destFwd, ref scratchFwd);
+            BurstBackward(ref pivot, cmp, invert, step++, pivotStep, ref bBase, ref destBase, ref scratchBase, bwdLen, ref b, ref destBwd, ref scratchBwd);
+            BurstForward(ref pivot, cmp, invert, step++, pivotStep, ref fBase, ref destBase, ref scratchBase, ref f, ref destFwd, ref scratchFwd);
+            BurstBackward(ref pivot, cmp, invert, step++, pivotStep, ref bBase, ref destBase, ref scratchBase, bwdLen, ref b, ref destBwd, ref scratchBwd);
+            BurstForward(ref pivot, cmp, invert, step++, pivotStep, ref fBase, ref destBase, ref scratchBase, ref f, ref destFwd, ref scratchFwd);
+            BurstBackward(ref pivot, cmp, invert, step++, pivotStep, ref bBase, ref destBase, ref scratchBase, bwdLen, ref b, ref destBwd, ref scratchBwd);
+        }
+        for (int i = 0; i < (n & 3); i++)
+        {
+            BurstForward(ref pivot, cmp, invert, step++, pivotStep, ref fBase, ref destBase, ref scratchBase, ref f, ref destFwd, ref scratchFwd);
+            BurstBackward(ref pivot, cmp, invert, step++, pivotStep, ref bBase, ref destBase, ref scratchBase, bwdLen, ref b, ref destBwd, ref scratchBwd);
+        }
+
+        // Restore the region cursors and shrink the views once per batch.
+        _numAtDestBegin = destFwd;
+        _scratchFwdIdx = destFwd + scratchFwd;
+        _numAtScratchEnd = scratchSpan.Length - scratchBwd;
+        _destBwdIdx = destBwd - _numAtScratchEnd;
+        ForwardScan.SplitOffBegin(n, out _);
+        BackwardScan.SplitOffEnd(n, out _);
+        if (pivotStep >= 0) _pivotRel = -1;
+        else if (p >= 0) _pivotRel = p - n;
+    }
+
+    /// <summary>One forward step of the burst path (partition_one_forward,
+    /// stable_quicksort.rs:157-184) on hoisted base refs and int cursors: branchless
+    /// conditional-ref store and ternary counter arithmetic. For
+    /// Unsafe.SizeOf&lt;T&gt;() &lt;= IntPtr.Size upstream's double-store replaces the
+    /// store-address select — the losing slot is overwritten by a later step or lies in
+    /// the never-read gap (the invariant analysis holds identically here since the
+    /// algorithm and its 2n &lt;= L bound are the same). Records the pivot element's
+    /// landing spot when this step is the one consuming it (step == pivotStep).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void BurstForward<TC>(ref T pivot, TC cmp, bool invert, int step, int pivotStep,
+        ref T fBase, ref T destBase, ref T scratchBase, ref int f, ref int destFwd, ref int scratchFwd)
+        where TC : struct, IIsLess<T>
+    {
+        ref T scan = ref Unsafe.Add(ref fBase, f);
+        bool towardsLeft = invert ? !cmp.IsLess(in pivot, in scan) : cmp.IsLess(in scan, in pivot);
+        int destOff = destFwd;
+        int scratchOff = scratchFwd;
+        if (Unsafe.SizeOf<T>() <= IntPtr.Size)
+        {
+            Unsafe.Add(ref destBase, destOff) = scan;
+            Unsafe.Add(ref scratchBase, scratchOff) = scan;
+        }
+        else
+        {
+            ref T dst = ref towardsLeft
+                ? ref Unsafe.Add(ref destBase, destOff)
+                : ref Unsafe.Add(ref scratchBase, scratchOff);
+            dst = scan;
+        }
+        if (step == pivotStep)
+        {
+            _pivotOutDest = towardsLeft;
+            _pivotOutAbs = towardsLeft ? destOff : scratchOff;
+        }
+        // Counter updates via the materialized 0/1, NOT ternaries: RyuJIT's Arm64
+        // if-conversion compiles `+= cond ? 1 : 0` back into cbz/cbnz branches
+        // (verified by JitDisasm), while byte-reinterpretation forces the bool into
+        // a register (cset) and keeps the rest pure arithmetic — actually branchless.
+        int tlFwd = Unsafe.As<bool, byte>(ref towardsLeft);
+        destFwd += tlFwd;
+        scratchFwd += 1 - tlFwd;
+        f++;
+    }
+
+    /// <summary>One backward step of the burst path (partition_one_backward,
+    /// stable_quicksort.rs:189-219): the less side goes to scratch's backward head and
+    /// the geq side to dest's backward head — the mirror of BurstForward.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void BurstBackward<TC>(ref T pivot, TC cmp, bool invert, int step, int pivotStep,
+        ref T bBase, ref T destBase, ref T scratchBase, int bwdLen, ref int b, ref int destBwd, ref int scratchBwd)
+        where TC : struct, IIsLess<T>
+    {
+        ref T scan = ref Unsafe.Add(ref bBase, bwdLen - 1 - b);
+        bool towardsLeft = invert ? !cmp.IsLess(in pivot, in scan) : cmp.IsLess(in scan, in pivot);
+        int destOff = destBwd - 1;
+        int scratchOff = scratchBwd - 1;
+        if (Unsafe.SizeOf<T>() <= IntPtr.Size)
+        {
+            Unsafe.Add(ref destBase, destOff) = scan;
+            Unsafe.Add(ref scratchBase, scratchOff) = scan;
+        }
+        else
+        {
+            ref T dst = ref towardsLeft
+                ? ref Unsafe.Add(ref scratchBase, scratchOff)
+                : ref Unsafe.Add(ref destBase, destOff);
+            dst = scan;
+        }
+        if (step == pivotStep)
+        {
+            _pivotOutDest = !towardsLeft;
+            _pivotOutAbs = towardsLeft ? scratchOff : destOff;
+        }
+        // See BurstForward: materialized 0/1 keeps the counter retreats arithmetic
+        // (RyuJIT otherwise re-branches ternary updates).
+        int tlBwd = Unsafe.As<bool, byte>(ref towardsLeft);
+        scratchBwd -= tlBwd;
+        destBwd -= 1 - tlBwd;
+        b++;
     }
 
     /// <summary>One forward or backward step with the (possibly inverted) comparison,
@@ -757,5 +930,28 @@ internal ref struct TwoPieceSpan<T>
         SplitAt(Length - i, out TwoPieceSpan<T> head, out removed);
         A = head.A;
         B = head.B;
+    }
+
+    /// <summary>Collapse to a single contiguous span when possible: single-piece
+    /// always; two-piece only when A's end is exactly B's start (the driver's regions
+    /// are built that way — see AsSingleOrCopy). Returns false for genuinely disjoint
+    /// pieces (only the public Partition seam can produce those).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal bool TryAsContiguousSpan(out Span<T> flat)
+    {
+        if (B.IsEmpty)
+        {
+            flat = A;
+            return true;
+        }
+        if (Unsafe.AreSame(
+                ref Unsafe.Add(ref MemoryMarshal.GetReference(A), A.Length),
+                ref MemoryMarshal.GetReference(B)))
+        {
+            flat = MemoryMarshal.CreateSpan(ref MemoryMarshal.GetReference(A), A.Length + B.Length);
+            return true;
+        }
+        flat = default;
+        return false;
     }
 }

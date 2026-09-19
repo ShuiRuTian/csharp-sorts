@@ -124,28 +124,14 @@ internal static class GlideSmallSort
 
     /// <summary>partial_sort_into (small_sort.rs:361-415): sorts the largest pow2 chunk of src
     /// (32/16/8/4/2/1 elements) into dst and returns the chunk length. dst len must be
-    /// at least min(src.len, 32) — holds for both call shapes in block_insertion_sort.</summary>
-    private static int PartialSortInto<T, TC>(Span<T> src, Span<T> dst, TC cmp) where TC : struct, IIsLess<T>
+    /// at least min(src.len, 32) — holds for both call shapes in block_insertion_sort.
+    /// netScratch (>= 64, disjoint from dst) is the network workspace — provided by
+    /// BlockInsertionSort's single scratch allocation (upstream's
+    /// with_stack_scratch::&lt;64&gt;), so no per-chunk pool round-trip happens here.</summary>
+    private static int PartialSortInto<T, TC>(Span<T> src, Span<T> dst, Span<T> netScratch, TC cmp)
+        where TC : struct, IIsLess<T>
     {
-        // with_stack_scratch::<64> (mut_slice.rs:398-409): true stack storage for value
-        // types without GC references; types containing references cannot live in
-        // untracked stack bytes (the GC would not update them on compaction), so they
-        // rent from the shared pool instead.
-        if (RuntimeHelpers.IsReferenceOrContainsReferences<T>())
-        {
-            T[] rented = ArrayPool<T>.Shared.Rent(64);
-            try
-            {
-                return PartialSortIntoCore(src, dst, rented.AsSpan(0, 64), cmp);
-            }
-            finally
-            {
-                ArrayPool<T>.Shared.Return(rented, clearArray: true);
-            }
-        }
-        Span<byte> raw = stackalloc byte[64 * Unsafe.SizeOf<T>()];
-        return PartialSortIntoCore(src, dst,
-            MemoryMarshal.CreateSpan(ref Unsafe.As<byte, T>(ref MemoryMarshal.GetReference(raw)), 64), cmp);
+        return PartialSortIntoCore(src, dst, netScratch.Slice(0, 64), cmp);
     }
 
     private static int PartialSortIntoCore<T, TC>(Span<T> src, Span<T> dst, Span<T> scratch, TC cmp) where TC : struct, IIsLess<T>
@@ -368,7 +354,16 @@ internal static class GlideSmallSort
     }
 
     /// <summary>block_insertion_sort (small_sort.rs:417-443): sort el by sorting a pow2
-    /// chunk at a time into scratch and inserting it into the sorted prefix through a hole.</summary>
+    /// chunk at a time into scratch and inserting it into the sorted prefix through a hole.
+    /// ONE scratch of 96 slots serves the whole call — [0..32) the chunk destination
+    /// (upstream's with_stack_scratch::&lt;32&gt;) and [32..96) the small-sort network
+    /// workspace (upstream's with_stack_scratch::&lt;64&gt; in partial_sort_into; the two
+    /// regions must stay disjoint — the network's final merge reads its [0..32) while
+    /// writing the chunk destination). With_stack_scratch::&lt;96&gt;: true stack storage
+    /// for value types without GC references; reference-carrying types cannot live in
+    /// untracked stack bytes (the GC would not update them on compaction), so they
+    /// make one pooled rent per small-sort instead of the former nested
+    /// rent-per-chunk round-trip.</summary>
     internal static void BlockInsertionSort<T, TC>(Span<T> el, TC cmp) where TC : struct, IIsLess<T>
     {
         int n = el.Length;
@@ -377,13 +372,13 @@ internal static class GlideSmallSort
             return;
         }
 
-        // with_stack_scratch::<32> (mut_slice.rs:398-409) — see PartialSortInto.
         if (RuntimeHelpers.IsReferenceOrContainsReferences<T>())
         {
-            T[] rented = ArrayPool<T>.Shared.Rent(32);
+            T[] rented = ArrayPool<T>.Shared.Rent(96);
             try
             {
-                BlockInsertionSortCore(el, cmp, rented.AsSpan(0, 32));
+                Span<T> scratch = rented.AsSpan(0, 96);
+                BlockInsertionSortCore(el, cmp, scratch.Slice(0, 32), scratch.Slice(32, 64));
             }
             finally
             {
@@ -392,21 +387,23 @@ internal static class GlideSmallSort
         }
         else
         {
-            Span<byte> raw = stackalloc byte[32 * Unsafe.SizeOf<T>()];
-            BlockInsertionSortCore(el, cmp,
-                MemoryMarshal.CreateSpan(ref Unsafe.As<byte, T>(ref MemoryMarshal.GetReference(raw)), 32));
+            Span<byte> raw = stackalloc byte[96 * Unsafe.SizeOf<T>()];
+            Span<T> scratch = MemoryMarshal.CreateSpan(
+                ref Unsafe.As<byte, T>(ref MemoryMarshal.GetReference(raw)), 96);
+            BlockInsertionSortCore(el, cmp, scratch.Slice(0, 32), scratch.Slice(32, 64));
         }
     }
 
-    private static void BlockInsertionSortCore<T, TC>(Span<T> el, TC cmp, Span<T> scratch) where TC : struct, IIsLess<T>
+    private static void BlockInsertionSortCore<T, TC>(Span<T> el, TC cmp, Span<T> scratch, Span<T> netScratch)
+        where TC : struct, IIsLess<T>
     {
         int n = el.Length;
-        int numSorted = PartialSortInto(el, el, cmp);
+        int numSorted = PartialSortInto(el, el, netScratch, cmp);
 
         while (numSorted < n)
         {
             Span<T> unsorted = el.Slice(numSorted);
-            int inLen = PartialSortInto(unsorted, scratch, cmp);
+            int inLen = PartialSortInto(unsorted, scratch, netScratch, cmp);
             numSorted += inLen;
             new BlockInserter<T>(scratch.Slice(0, inLen), el, numSorted - inLen).Insert(cmp);
         }

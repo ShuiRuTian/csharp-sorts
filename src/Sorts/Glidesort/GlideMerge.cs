@@ -46,8 +46,9 @@ internal static class GlideMerge
                 for (int i = 0; i < left.Length; i++)
                     if (cmp.IsLess(in firstRight, in left[i])) { firstLeftToRight = i; break; }
                 int lastRightToLeft = -1;
+                ref T rightBase = ref MemoryMarshal.GetReference(right);
                 for (int i = right.Length - 1; i >= 0; i--)
-                    if (cmp.IsLess(in right[i], in lastLeft)) { lastRightToLeft = i; break; }
+                    if (cmp.IsLess(in Unsafe.Add(ref rightBase, i), in lastLeft)) { lastRightToLeft = i; break; }
                 // Unreachable for a valid comparator; upstream also bails out here.
                 if (firstLeftToRight >= 0 && lastRightToLeft >= 0)
                     return (firstLeftToRight, lastRightToLeft + 1); // r + 1: exclusive bound.
@@ -174,17 +175,20 @@ internal static class GlideMerge
             ref T r = ref MemoryMarshal.GetReference(_right);
             ref T d = ref MemoryMarshal.GetReference(_dst);
             bool rightLess = cmp.IsLess(in Unsafe.Add(ref r, _rightBegin), in Unsafe.Add(ref l, _leftBegin));
-            if (rightLess)
-            {
-                Unsafe.Add(ref d, _dstBegin) = Unsafe.Add(ref r, _rightBegin);
-                _rightBegin++;
-            }
-            else
-            {
-                Unsafe.Add(ref d, _dstBegin) = Unsafe.Add(ref l, _leftBegin);
-                _leftBegin++;
-            }
+            // Branchless store-select (upstream's ptr::select + copy_nonoverlapping),
+            // mirroring DriftMerge.MergeUp: one conditional-ref source, one store,
+            // cursor advance via integer arithmetic (ties stay towards left).
+            ref T srcBegin = ref rightLess
+                ? ref Unsafe.Add(ref r, _rightBegin)
+                : ref Unsafe.Add(ref l, _leftBegin);
+            Unsafe.Add(ref d, _dstBegin) = srcBegin;
             _dstBegin++;
+            // Materialized 0/1 (not ternary): RyuJIT's Arm64 if-conversion turns
+            // `+= cond ? 1 : 0` back into branches; byte-reinterpretation forces
+            // the cset + pure arithmetic — actually branchless (JitDisasm-verified).
+            int rl = Unsafe.As<bool, byte>(ref rightLess);
+            _rightBegin += rl;
+            _leftBegin += 1 - rl;
         }
 
         /// <summary>branchless_merge_one_at_end (branchless_merge.rs:229-245): merge the
@@ -197,16 +201,18 @@ internal static class GlideMerge
             ref T d = ref MemoryMarshal.GetReference(_dst);
             bool rightLess = cmp.IsLess(in Unsafe.Add(ref r, _rightEnd - 1), in Unsafe.Add(ref l, _leftEnd - 1));
             _dstEnd--;
-            if (rightLess)
-            {
-                Unsafe.Add(ref d, _dstEnd) = Unsafe.Add(ref l, _leftEnd - 1);
-                _leftEnd--;
-            }
-            else
-            {
-                Unsafe.Add(ref d, _dstEnd) = Unsafe.Add(ref r, _rightEnd - 1);
-                _rightEnd--;
-            }
+            // Branchless store-select mirroring DriftMerge.MergeDown: one
+            // conditional-ref source, one store, integer-arithmetic cursor
+            // retreat (ties stay towards right).
+            ref T srcEnd = ref rightLess
+                ? ref Unsafe.Add(ref l, _leftEnd - 1)
+                : ref Unsafe.Add(ref r, _rightEnd - 1);
+            Unsafe.Add(ref d, _dstEnd) = srcEnd;
+            // See MergeOneAtBegin: materialized 0/1 keeps the retreat arithmetic
+            // branchless under RyuJIT.
+            int rlEnd = Unsafe.As<bool, byte>(ref rightLess);
+            _leftEnd -= rlEnd;
+            _rightEnd -= 1 - rlEnd;
         }
 
         /// <summary>symmetric_merge_successful (branchless_merge.rs:280-284): left_begin ==

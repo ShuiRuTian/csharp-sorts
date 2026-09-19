@@ -828,14 +828,14 @@ internal static partial class QuadsortImpl
             // head_branchless_merge clang form: *array++ = cmp(ptl, ptr) <= 0 ? *ptl++ : *ptr++
             le = !cmp.IsLess(in Unsafe.Add(ref arr, ptr), in Unsafe.Add(ref sw, ptl));
             Unsafe.Add(ref arr, w) = le ? Unsafe.Add(ref sw, ptl) : Unsafe.Add(ref arr, ptr);
-            w++; if (le) ptl++; else ptr++;
+            w++; ptl += le ? 1 : 0; ptr += le ? 0 : 1;
         }
 
         while (ptl <= tpl && ptr <= tpr)
         {
             le = !cmp.IsLess(in Unsafe.Add(ref arr, ptr), in Unsafe.Add(ref sw, ptl));
             Unsafe.Add(ref arr, w) = le ? Unsafe.Add(ref sw, ptl) : Unsafe.Add(ref arr, ptr);
-            w++; if (le) ptl++; else ptr++;
+            w++; ptl += le ? 1 : 0; ptr += le ? 0 : 1;
         }
 
         while (ptl <= tpl)
@@ -925,7 +925,7 @@ internal static partial class QuadsortImpl
                     // tail_branchless_merge clang form: *tpa-- = cmp(tpl, tpr) > 0 ? *tpl-- : *tpr--
                     gt = cmp.IsLess(in Unsafe.Add(ref sw, tpr), in Unsafe.Add(ref arr, tpl));
                     Unsafe.Add(ref arr, tpa) = gt ? Unsafe.Add(ref arr, tpl) : Unsafe.Add(ref sw, tpr);
-                    if (gt) tpl--; else tpr--;
+                    tpl -= gt ? 1 : 0; tpr -= gt ? 0 : 1;
                     tpa--;
                 }
             }
@@ -978,7 +978,7 @@ internal static partial class QuadsortImpl
             // tail_branchless_merge clang form
             gt = cmp.IsLess(in Unsafe.Add(ref sw, tpr), in Unsafe.Add(ref arr, tpl));
             Unsafe.Add(ref arr, tpa) = gt ? Unsafe.Add(ref arr, tpl) : Unsafe.Add(ref sw, tpr);
-            if (gt) tpl--; else tpr--;
+            tpl -= gt ? 1 : 0; tpr -= gt ? 0 : 1;
             tpa--;
         }
 
@@ -986,7 +986,7 @@ internal static partial class QuadsortImpl
         {
             gt = cmp.IsLess(in Unsafe.Add(ref sw, tpr), in Unsafe.Add(ref arr, tpl)); // cmp(tpl, tpr) > 0
             Unsafe.Add(ref arr, tpa) = gt ? Unsafe.Add(ref arr, tpl) : Unsafe.Add(ref sw, tpr);
-            if (gt) tpl--; else tpr--;
+            tpl -= gt ? 1 : 0; tpr -= gt ? 0 : 1;
             tpa--;
         }
 

@@ -48,14 +48,55 @@ public static class GlideSort
     /// <summary>THE kernel each algorithm task implements — the full upstream glidesort()
     /// (glidesort.rs:203-265) via GlidesortImpl. Scratch sizing follows glidesort_alloc_size
     /// (lib.rs:64-70): when sorting N elements we allocate a buffer of at most size N, N/2
-    /// or N/8 depending on how large the data is, and never less than SMALL_SORT.</summary>
+    /// or N/8 depending on how large the data is, and never less than SMALL_SORT.
+    /// Upstream's two allocation-free fast paths (lib.rs:132-139, 272-295) are included:
+    /// inputs below SMALL_SORT go straight to small_sort with no scratch and no
+    /// merge-stack machinery, and inputs whose scratch fits the small band use the
+    /// per-(T, thread) buffer instead of the heap.</summary>
     internal static void SortSpan<T, TC>(Span<T> v, Span<T> scratch, TC cmp) where TC : struct, IIsLess<T>
     {
         if (v.Length < 2) return;
+        if (v.Length < GlideSmallSort.SmallSort)
+        {
+            GlideSmallSort.Sort(v, cmp);
+            return;
+        }
         int alloc = GlidesortAllocSize<T>(v.Length);
         if (scratch.Length < alloc)
-            scratch = GC.AllocateUninitializedArray<T>(alloc);
+        {
+            // For small inputs 4KiB of storage suffices, avoiding the
+            // (de-)allocator (lib.rs:272-295, glidesort_with_max_stack_scratch).
+            // stackalloc is impossible for generic T, so a per-(T, thread)
+            // 512-element buffer (DriftSort's ScratchCache pattern) stands in,
+            // used when the allocation fits; otherwise allocate on the heap.
+            if (alloc <= StackScratchLen)
+            {
+                var buf = ScratchCache<T>.Buffer;
+                if (buf is null)
+                {
+                    ScratchCache<T>.Buffer = buf = new T[StackScratchLen];
+                }
+                scratch = buf;
+            }
+            else
+            {
+                scratch = GC.AllocateUninitializedArray<T>(alloc);
+            }
+        }
         GlidesortImpl.Sort(v, scratch, cmp, eagerSmallsort: false);
+    }
+
+    private const int StackScratchLen = 512;
+
+    /// <summary>Per-(T, thread) holder standing in for upstream's 4096-byte
+    /// AlignedStorage stack scratch (lib.rs:125-145). Same reentrancy caveat as
+    /// QuadSort/DriftSort's ThreadStatic buffers: a GlideSort re-entered on the same
+    /// thread while a parent call still uses the buffer would alias it — impossible
+    /// in the current call graph, and identical to the documented existing policy.</summary>
+    private static class ScratchCache<T>
+    {
+        [ThreadStatic]
+        internal static T[]? Buffer;
     }
 
     // lib.rs:24-27 — when sorting N elements we allocate a buffer of at most size N,

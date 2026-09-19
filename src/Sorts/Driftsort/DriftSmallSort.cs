@@ -304,14 +304,18 @@ internal static class DriftSmallSort
 /// <summary>SmallSortTypeImpl type dispatch (smallsort.rs:16-64): Freeze types take the
 /// optimized network with SMALL_SORT_THRESHOLD = 32, everything else insertion sort with
 /// threshold 16. Upstream's dispatch is Freeze-only with no size bound (smallsort.rs:50
-/// `impl&lt;T: crate::Freeze&gt;`); its Freeze auto-trait (lib.rs:153-160, no interior
-/// mutability) maps to C# value types containing no managed references. The const
-/// size_of branch inside sort_small_general (smallsort.rs:88) only selects the sort8 vs
+/// `impl&lt;T: crate::Freeze&gt;`). Rust's Freeze auto-trait (lib.rs:153-160 — no interior
+/// mutability) INCLUDES String/&amp;T/Box, so upstream runs the network for managed
+/// element types; a copied C# reference aliases the same object, so the network's
+/// compares-on-copies are equally hazard-free here. Managed types therefore take the
+/// network too; only value types CONTAINING managed references stay on insertion sort
+/// (conservative — upstream has no such types to check against). The const size_of
+/// branch inside sort_small_general (smallsort.rs:88) only selects the sort8 vs
 /// sort4 presort within the network — it is not part of the dispatch.</summary>
 internal static class SmallSortConfig<T>
 {
     /// <summary>Whether T qualifies for sort_small_general; otherwise SortSmall falls
     /// back to insertion_sort_shift_left.</summary>
     internal static readonly bool IsFreezeLike =
-        typeof(T).IsValueType && !RuntimeHelpers.IsReferenceOrContainsReferences<T>();
+        !typeof(T).IsValueType || !RuntimeHelpers.IsReferenceOrContainsReferences<T>();
 }
