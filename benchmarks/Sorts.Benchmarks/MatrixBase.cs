@@ -20,8 +20,8 @@ internal static class Ring
     public const int Size = 64;
 }
 
-/// <summary>Shared plumbing for the three matrices: template init + the four benchmark
-/// methods (Array.Sort baseline + our three sorts). Derived classes declare the
+/// <summary>Shared plumbing for the three matrices: template init + the five benchmark
+/// methods (Array.Sort baseline + our four sorts). Derived classes declare the
 /// [Params] and build the template in [GlobalSetup] via Init. Every invocation
 /// consumes one fresh clone from the ring — no IterationSetup (see RingData.cs).</summary>
 public abstract class SortMatrixBase<T> where T : IComparable<T>
@@ -49,10 +49,13 @@ public abstract class SortMatrixBase<T> where T : IComparable<T>
 
     [Benchmark]
     public void DriftSort() => Sorts.DriftSort.Sort(_ring.Next());
+
+    [Benchmark]
+    public void Ipnsort() => Sorts.Ipnsort.Sort(_ring.Next());
 }
 
-/// <summary>Core matrix: all 12 distributions × 3 sizes × 4 implementations — the main
-/// adaptivity/robustness grid (36 parameter cases, 144 benchmark cases).</summary>
+/// <summary>Core matrix: all 12 distributions × 3 sizes × 5 implementations — the main
+/// adaptivity/robustness grid (36 parameter cases, 180 benchmark cases).</summary>
 [Config(typeof(BenchConfig))]
 [InvocationCount(Ring.Size)]
 public class CoreMatrixBench : SortMatrixBase<int>

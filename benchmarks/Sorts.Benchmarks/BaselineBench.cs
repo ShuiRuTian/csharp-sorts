@@ -7,7 +7,7 @@ namespace Sorts.Benchmarks;
 
 /// <summary>Baseline zoo, int Random 100k: Array.Sort via every BCL entry point
 /// (generic, IComparer, Comparison) plus LINQ OrderBy — the only *stable* reference —
-/// against our three sorts. ArraySort_Generic is the baseline; the IComparer and
+/// against our four sorts. ArraySort_Generic is the baseline; the IComparer and
 /// Comparison variants show the interface/virtual-dispatch tax; Linq_OrderBy shows
 /// the stability tax (it allocates its output array, by design).</summary>
 [Config(typeof(BenchConfig))]
@@ -27,8 +27,8 @@ public class BaselineBench : SortMatrixBase<int>
     [GlobalSetup]
     public void Setup() => Init(DataGen.Ints(Dist, N, Seed));
 
-    // ArraySort_Generic / QuadSort / GlideSort / DriftSort are inherited from
-    // SortMatrixBase; these are the additional baseline entry points.
+    // ArraySort_Generic / QuadSort / GlideSort / DriftSort / Ipnsort are inherited
+    // from SortMatrixBase; these are the additional baseline entry points.
 
     [Benchmark]
     public void ArraySort_IComparer() => Array.Sort(Next(), PlainIntComparer.Instance);
@@ -41,8 +41,9 @@ public class BaselineBench : SortMatrixBase<int>
 }
 
 /// <summary>Pair variant: struct-with-payload (int Key + int Payload) at Random
-/// 100k. Array.Sort (unstable) and our three stable sorts vs LINQ OrderBy — the
-/// stable-sort cost of moving 8-byte records instead of bare ints.</summary>
+/// 100k. Array.Sort (unstable), our three stable sorts and Ipnsort (unstable) vs
+/// LINQ OrderBy — the stable-sort cost of moving 8-byte records instead of bare
+/// ints.</summary>
 [Config(typeof(BenchConfig))]
 [InvocationCount(Ring.Size)]
 public class PairBench : SortMatrixBase<Pair>
