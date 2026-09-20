@@ -12,6 +12,7 @@ public class ApiContractTests
         ["QuadSort"] = static a => Sorts.QuadSort.Sort(a),
         ["GlideSort"] = static a => Sorts.GlideSort.Sort(a),
         ["DriftSort"] = static a => Sorts.DriftSort.Sort(a),
+        ["Ipnsort"] = static a => Sorts.Ipnsort.Sort(a),
     };
 
     private static readonly Dictionary<string, Action<int[], int, int>> SortRange = new()
@@ -19,6 +20,7 @@ public class ApiContractTests
         ["QuadSort"] = static (a, i, l) => Sorts.QuadSort.Sort(a, i, l),
         ["GlideSort"] = static (a, i, l) => Sorts.GlideSort.Sort(a, i, l),
         ["DriftSort"] = static (a, i, l) => Sorts.DriftSort.Sort(a, i, l),
+        ["Ipnsort"] = static (a, i, l) => Sorts.Ipnsort.Sort(a, i, l),
     };
 
     private static readonly Dictionary<string, Action<int[]>> SortWithNullComparer = new()
@@ -26,6 +28,7 @@ public class ApiContractTests
         ["QuadSort"] = static a => Sorts.QuadSort.Sort(a, (IComparer<int>?)null),
         ["GlideSort"] = static a => Sorts.GlideSort.Sort(a, (IComparer<int>?)null),
         ["DriftSort"] = static a => Sorts.DriftSort.Sort(a, (IComparer<int>?)null),
+        ["Ipnsort"] = static a => Sorts.Ipnsort.Sort(a, (IComparer<int>?)null),
     };
 
     private static readonly Dictionary<string, Action<int[]>> SortWithComparison = new()
@@ -33,10 +36,11 @@ public class ApiContractTests
         ["QuadSort"] = static a => Sorts.QuadSort.Sort(a, static (int x, int y) => x.CompareTo(y)),
         ["GlideSort"] = static a => Sorts.GlideSort.Sort(a, static (int x, int y) => x.CompareTo(y)),
         ["DriftSort"] = static a => Sorts.DriftSort.Sort(a, static (int x, int y) => x.CompareTo(y)),
+        ["Ipnsort"] = static a => Sorts.Ipnsort.Sort(a, static (int x, int y) => x.CompareTo(y)),
     };
 
-    public static IEnumerable<object[]> AllSorts() // reflect over the 3 classes
-        => new object[][] { new[] { "QuadSort" }, new[] { "GlideSort" }, new[] { "DriftSort" } };
+    public static IEnumerable<object[]> AllSorts() // reflect over the 4 classes
+        => new object[][] { new[] { "QuadSort" }, new[] { "GlideSort" }, new[] { "DriftSort" }, new[] { "Ipnsort" } };
 
     [Theory]
     [MemberData(nameof(AllSorts))]
