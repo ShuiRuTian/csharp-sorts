@@ -45,7 +45,25 @@ public static class Ipnsort
         => SortSpan<T, ComparerAdapter<T, TC>>(span, scratch: default, new ComparerAdapter<T, TC>(cmp));
 
     /// <summary>THE kernel — in-place, scratch unused by design (upstream allocates
-    /// nothing); Tasks 18-20 implement.</summary>
+    /// nothing). unstable_sort (lib.rs:114-146): zero-length and singleton slices
+    /// return; up to MAX_LEN_ALWAYS_INSERTION_SORT (20) insertion sort wins on
+    /// i-cache footprint in general-purpose code; above that, ipnsort.</summary>
     internal static void SortSpan<T, TC>(Span<T> v, Span<T> scratch, TC cmp) where TC : struct, IIsLess<T>
-        => throw new NotImplementedException();
+    {
+        // More advanced sorting methods than insertion sort are faster if called in
+        // a hot loop for small inputs, but for general-purpose code the small binary
+        // size of insertion sort is more important (lib.rs:124-133).
+        const int MaxLenAlwaysInsertionSort = 20;
+        int len = v.Length;
+        if (len < 2)
+            return;
+
+        if (len <= MaxLenAlwaysInsertionSort)
+        {
+            DriftSmallSort.InsertionSortShiftLeft(v, cmp, 1);
+            return;
+        }
+
+        IpnImpl.Sort(v, cmp);
+    }
 }

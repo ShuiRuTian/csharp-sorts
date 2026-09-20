@@ -30,8 +30,13 @@ internal static class IpnPartition
     /// partition v[1..] via inst_partition (quicksort.rs:150-159: sizeof(T) &lt;= 96
     /// → branchless Lomuto, else branchy Hoare), then swap the pivot to index num_lt.
     /// On return v[0..num_lt) are &lt; pivot, v[num_lt] is the pivot and
-    /// v[num_lt+1..] are &gt;= pivot; num_lt is the count of elements &lt; pivot.</summary>
-    internal static int Partition<T, TC>(Span<T> v, int pivotPos, TC cmp)
+    /// v[num_lt+1..] are &gt;= pivot; num_lt is the count of elements &lt; pivot.
+    /// invert (the driver's ancestor-equal call, quicksort.rs:45) replaces every
+    /// is_less(cur, pivot) with the inverted closure |a, b| !is_less(b, a):
+    /// "less" becomes !pivot &lt; cur, so num_lt counts elements &lt;= pivot and
+    /// v[num_lt+1..] are &gt; pivot (equals land in v[0..num_lt]). Same shape as
+    /// DriftQuicksort.StablePartition's invert.</summary>
+    internal static int Partition<T, TC>(Span<T> v, int pivotPos, TC cmp, bool invert = false)
         where TC : struct, IIsLess<T>
     {
         int len = v.Length;
@@ -51,8 +56,8 @@ internal static class IpnPartition
 
         // Unsafe.SizeOf is a JIT constant — the branch is folded at compile time.
         int numLt = Unsafe.SizeOf<T>() <= MaxBranchlessPartitionSize
-            ? PartitionLomutoBranchlessCyclic<T, TC>(vWithoutPivot, in pivot, cmp)
-            : PartitionHoareBranchyCyclic<T, TC>(vWithoutPivot, in pivot, cmp);
+            ? PartitionLomutoBranchlessCyclic<T, TC>(vWithoutPivot, in pivot, invert, cmp)
+            : PartitionHoareBranchyCyclic<T, TC>(vWithoutPivot, in pivot, invert, cmp);
 
         // Place the pivot between the two partitions (quicksort.rs:145).
         Swap(ref v[0], ref v[numLt]);
@@ -62,7 +67,7 @@ internal static class IpnPartition
     /// <summary>partition_lomuto_branchless_cyclic (quicksort.rs:254-353). Novel
     /// partition by Lukas Bergdoll and Orson Peters: branchless Lomuto partition
     /// paired with a cyclic permutation.</summary>
-    private static int PartitionLomutoBranchlessCyclic<T, TC>(Span<T> v, in T pivot, TC cmp)
+    private static int PartitionLomutoBranchlessCyclic<T, TC>(Span<T> v, in T pivot, bool invert, TC cmp)
         where TC : struct, IIsLess<T>
     {
         int len = v.Length;
@@ -88,16 +93,16 @@ internal static class IpnPartition
         {
             while (right < unrollEnd)
             {
-                LoopBody(ref vBase, in pivot, cmp, ref gapPos, ref numLt, ref right,
+                LoopBody(ref vBase, in pivot, invert, cmp, ref gapPos, ref numLt, ref right,
                     in Unsafe.Add(ref vBase, right));
-                LoopBody(ref vBase, in pivot, cmp, ref gapPos, ref numLt, ref right,
+                LoopBody(ref vBase, in pivot, invert, cmp, ref gapPos, ref numLt, ref right,
                     in Unsafe.Add(ref vBase, right));
             }
         }
         else
         {
             while (right < unrollEnd)
-                LoopBody(ref vBase, in pivot, cmp, ref gapPos, ref numLt, ref right,
+                LoopBody(ref vBase, in pivot, invert, cmp, ref gapPos, ref numLt, ref right,
                     in Unsafe.Add(ref vBase, right));
         }
 
@@ -110,12 +115,12 @@ internal static class IpnPartition
         {
             if (right == end)
             {
-                LoopBody(ref vBase, in pivot, cmp, ref gapPos, ref numLt, ref right,
+                LoopBody(ref vBase, in pivot, invert, cmp, ref gapPos, ref numLt, ref right,
                     in gapValue);
                 break;
             }
 
-            LoopBody(ref vBase, in pivot, cmp, ref gapPos, ref numLt, ref right,
+            LoopBody(ref vBase, in pivot, invert, cmp, ref gapPos, ref numLt, ref right,
                 in Unsafe.Add(ref vBase, right));
         }
 
@@ -129,10 +134,11 @@ internal static class IpnPartition
     /// (quicksort.rs:332-333).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void LoopBody<T, TC>(
-        ref T vBase, in T pivot, TC cmp, ref int gapPos, ref int numLt, ref int right, in T rightVal)
+        ref T vBase, in T pivot, bool invert, TC cmp, ref int gapPos, ref int numLt, ref int right,
+        in T rightVal)
         where TC : struct, IIsLess<T>
     {
-        bool rightIsLt = cmp.IsLess(in rightVal, in pivot);
+        bool rightIsLt = LessThanPivot(in rightVal, in pivot, invert, cmp);
         int left = numLt;
 
         // ptr::copy(left, gap.pos, 1) — read-then-write, memmove for one element.
@@ -146,10 +152,19 @@ internal static class IpnPartition
         right++;
     }
 
+    /// <summary>The partition comparison (quicksort.rs:107's is_less over the scan
+    /// element and the pivot, and the driver's inverted closure
+    /// |a, b| !is_less(b, a) at quicksort.rs:45): !pivot &lt; cur under inversion,
+    /// else cur &lt; pivot. Same shape as DriftQuicksort.LessThanPivot.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool LessThanPivot<T, TC>(in T cur, in T pivot, bool invert, TC cmp)
+        where TC : struct, IIsLess<T>
+        => invert ? !cmp.IsLess(in pivot, in cur) : cmp.IsLess(in cur, in pivot);
+
     /// <summary>partition_hoare_branchy_cyclic (quicksort.rs:162-242): optimized for
     /// large types that are expensive to move and small code-gen; swaps each pair of
     /// out-of-order elements through a single-element gap (cyclic permutation).</summary>
-    private static int PartitionHoareBranchyCyclic<T, TC>(Span<T> v, in T pivot, TC cmp)
+    private static int PartitionHoareBranchyCyclic<T, TC>(Span<T> v, in T pivot, bool invert, TC cmp)
         where TC : struct, IIsLess<T>
     {
         int len = v.Length;
@@ -171,14 +186,14 @@ internal static class IpnPartition
         while (true)
         {
             // Find the first element greater than the pivot (quicksort.rs:198-200).
-            while (left < right && cmp.IsLess(in Unsafe.Add(ref vBase, left), in pivot))
+            while (left < right && LessThanPivot(in Unsafe.Add(ref vBase, left), in pivot, invert, cmp))
                 left++;
 
             // Find the last element equal to the pivot (quicksort.rs:203-208).
             while (true)
             {
                 right--;
-                if (left >= right || cmp.IsLess(in Unsafe.Add(ref vBase, right), in pivot))
+                if (left >= right || LessThanPivot(in Unsafe.Add(ref vBase, right), in pivot, invert, cmp))
                     break;
             }
 

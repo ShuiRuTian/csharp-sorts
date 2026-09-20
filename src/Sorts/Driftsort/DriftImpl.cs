@@ -185,9 +185,11 @@ internal static class DriftImpl
     }
 
     /// <summary>Finds a run of sorted elements starting at the beginning of v
-    /// (drift.rs:265-293). Returns the run length and whether the run is strictly
-    /// descending (false means ascending, possibly with equal elements).</summary>
-    private static (int RunLen, bool WasReversed) FindExistingRun<T, TC>(Span<T> v, TC cmp)
+    /// (drift.rs:265-293; ipnsort's copy at ipnsort lib.rs:181-201 is semantically
+    /// identical and reuses this — exposed internal for IpnImpl). Returns the run
+    /// length and whether the run is strictly descending (false means ascending,
+    /// possibly with equal elements).</summary>
+    internal static (int RunLen, bool WasReversed) FindExistingRun<T, TC>(Span<T> v, TC cmp)
         where TC : struct, IIsLess<T>
     {
         int len = v.Length;
