@@ -138,7 +138,7 @@ internal static class DriftSmallSort
     /// parks the tail element in scratch_tmp and lets a CopyOnDrop guard place it into the
     /// gap on scope exit; the port saves it in a local and writes it after the loop — the
     /// identical element movement.</summary>
-    private static void InsertTail<T, TC>(ref T dstBase, int tailIdx, TC cmp) where TC : struct, IIsLess<T>
+    internal static void InsertTail<T, TC>(ref T dstBase, int tailIdx, TC cmp) where TC : struct, IIsLess<T>
     {
         int sift = tailIdx - 1;
         if (!cmp.IsLess(in Unsafe.Add(ref dstBase, tailIdx), in Unsafe.Add(ref dstBase, sift)))
@@ -164,7 +164,7 @@ internal static class DriftSmallSort
     /// sorting vBase[0..4] into dst[0..4]; every element is copied exactly once. The
     /// pointer select (smallsort.rs:298-304) becomes a conditional ref expression, which
     /// compiles to cmov.</summary>
-    private static void Sort4Stable<T, TC>(ref T vBase, ref T dst, TC cmp) where TC : struct, IIsLess<T>
+    internal static void Sort4Stable<T, TC>(ref T vBase, ref T dst, TC cmp) where TC : struct, IIsLess<T>
     {
         // Stably create two pairs a <= b and c <= d.
         int c1 = cmp.IsLess(in Unsafe.Add(ref vBase, 1), in vBase) ? 1 : 0;
@@ -202,7 +202,7 @@ internal static class DriftSmallSort
 
     /// <summary>sort8_stable (smallsort.rs:310-327): sorts vBase[0..8] into dst[0..8] via
     /// two sort4_stable networks into scratchBase[0..8], then a bidirectional merge.</summary>
-    private static void Sort8Stable<T, TC>(ref T vBase, ref T dst, ref T scratchBase, TC cmp) where TC : struct, IIsLess<T>
+    internal static void Sort8Stable<T, TC>(ref T vBase, ref T dst, ref T scratchBase, TC cmp) where TC : struct, IIsLess<T>
     {
         Sort4Stable(ref vBase, ref scratchBase, cmp);
         Sort4Stable(ref Unsafe.Add(ref vBase, 4), ref Unsafe.Add(ref scratchBase, 4), cmp);
@@ -247,7 +247,7 @@ internal static class DriftSmallSort
     /// become plain int offsets, in-bounds at every read for any comparator outcome.
     /// T must be Freeze-like (see SmallSortConfig) — the comparator may observe outdated
     /// temporary copies that never reach the final array.</summary>
-    private static void BidirectionalMerge<T, TC>(ref T src, int len, ref T dst, TC cmp) where TC : struct, IIsLess<T>
+    internal static void BidirectionalMerge<T, TC>(ref T src, int len, ref T dst, TC cmp) where TC : struct, IIsLess<T>
     {
         int lenDiv2 = len / 2;
         int left = 0, right = lenDiv2, outPos = 0;
