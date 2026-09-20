@@ -1,0 +1,21 @@
+[package]
+name = "sort_research_rs_fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+sort_research_rs = { path = ".." }
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "libfuzzer_main"
+path = "fuzz_targets/libfuzzer_main.rs"
+test = false
+doc = false

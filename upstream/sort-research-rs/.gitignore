@@ -1,0 +1,12 @@
+/target
+.gdb_history
+.vscode
+
+# generated analysis html
+/analysis_*
+# python environment
+/venv
+# benchmark output json
+/*.json
+
+**/__pycache__/
