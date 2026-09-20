@@ -1,0 +1,226 @@
+// Ported from https://github.com/Voultapher/sort-research-rs (ipnsort src/quicksort.rs),
+// MIT OR Apache-2.0, by Lukas Bergdoll. C# port 2026 — the heart of ipnsort: the novel
+// branchless Lomuto cyclic partition and the branchy Hoare cyclic partition.
+//
+// GapGuard divergence (binding ruling, same policy as the other ipnsort ports):
+// upstream keeps the displaced "gap" element in a ManuallyDrop stack value that Drop
+// writes back into the slice if is_less panics. C# has no Drop: the gap value is a
+// plain local (a value copy for struct T, a reference copy for reference T — identical
+// aliasing semantics) and the write-back upstream performs in Drop is done
+// EXPLICITLY on the normal path (lomuto: the is_done loop_body call consumes it as
+// `right` and copies it into the array; hoare: the post-loop write to gap.pos). On a
+// comparer exception the slice contents are unspecified (duplicates or lost elements
+// are acceptable per the parent contract) but never memory-unsafe; no finalizers.
+//
+// All other dataflow is 1:1: raw pointers become a base ref + int indices,
+// ptr::copy / copy_nonoverlapping become read-then-write element moves, and
+// ManuallyDrop becomes plain locals.
+using System;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+
+namespace Sorts;
+
+internal static class IpnPartition
+{
+    /// <summary>MAX_BRANCHLESS_PARTITION_SIZE (quicksort.rs:151).</summary>
+    private const int MaxBranchlessPartitionSize = 96;
+
+    /// <summary>partition (quicksort.rs:113-148): swap the pivot to the front,
+    /// partition v[1..] via inst_partition (quicksort.rs:150-159: sizeof(T) &lt;= 96
+    /// → branchless Lomuto, else branchy Hoare), then swap the pivot to index num_lt.
+    /// On return v[0..num_lt) are &lt; pivot, v[num_lt] is the pivot and
+    /// v[num_lt+1..] are &gt;= pivot; num_lt is the count of elements &lt; pivot.</summary>
+    internal static int Partition<T, TC>(Span<T> v, int pivotPos, TC cmp)
+        where TC : struct, IIsLess<T>
+    {
+        int len = v.Length;
+        if (len == 0)
+            return 0;
+
+        // upstream intrinsics::abort() — a caller bug, kept as a hard check.
+        if (pivotPos < 0 || pivotPos >= len)
+            throw new ArgumentOutOfRangeException(nameof(pivotPos));
+
+        // Place the pivot at the beginning of the slice (quicksort.rs:130).
+        Swap(ref v[0], ref v[pivotPos]);
+        // pivot aliases v[0]; both impls only ever write v[1..] (their index 0 is
+        // v[1] of the full span), so the pivot slot is never clobbered.
+        ref T pivot = ref v[0];
+        Span<T> vWithoutPivot = v.Slice(1);
+
+        // Unsafe.SizeOf is a JIT constant — the branch is folded at compile time.
+        int numLt = Unsafe.SizeOf<T>() <= MaxBranchlessPartitionSize
+            ? PartitionLomutoBranchlessCyclic<T, TC>(vWithoutPivot, in pivot, cmp)
+            : PartitionHoareBranchyCyclic<T, TC>(vWithoutPivot, in pivot, cmp);
+
+        // Place the pivot between the two partitions (quicksort.rs:145).
+        Swap(ref v[0], ref v[numLt]);
+        return numLt;
+    }
+
+    /// <summary>partition_lomuto_branchless_cyclic (quicksort.rs:254-353). Novel
+    /// partition by Lukas Bergdoll and Orson Peters: branchless Lomuto partition
+    /// paired with a cyclic permutation.</summary>
+    private static int PartitionLomutoBranchlessCyclic<T, TC>(Span<T> v, in T pivot, TC cmp)
+        where TC : struct, IIsLess<T>
+    {
+        int len = v.Length;
+        if (len == 0)
+            return 0;
+
+        ref T vBase = ref MemoryMarshal.GetReference(v);
+
+        // The gap value (quicksort.rs:302): ptr::read(v_base) — a value copy held
+        // outside the array. Upstream wraps it in ManuallyDrop + GapGuardRaw; here
+        // it is a plain local whose write-back is the is_done LoopBody call below.
+        T gapValue = vBase;
+
+        int gapPos = 0;   // gap.pos — index of the current duplicate; starts at v_base.
+        int numLt = 0;
+        int right = 1;
+
+        // Manual unrolling (quicksort.rs:316-330): 2 for sizeof <= 16, else 1.
+        int unrollLen = Unsafe.SizeOf<T>() <= 16 ? 2 : 1;
+        int unrollEnd = len - (unrollLen - 1);
+
+        if (unrollLen == 2)
+        {
+            while (right < unrollEnd)
+            {
+                LoopBody(ref vBase, in pivot, cmp, ref gapPos, ref numLt, ref right,
+                    in Unsafe.Add(ref vBase, right));
+                LoopBody(ref vBase, in pivot, cmp, ref gapPos, ref numLt, ref right,
+                    in Unsafe.Add(ref vBase, right));
+            }
+        }
+        else
+        {
+            while (right < unrollEnd)
+                LoopBody(ref vBase, in pivot, cmp, ref gapPos, ref numLt, ref right,
+                    in Unsafe.Add(ref vBase, right));
+        }
+
+        // Cleanup (quicksort.rs:334-349): one shared loop for the unroll remainder
+        // and the final write-back of the gap value. When is_done, the saved gap
+        // value acts as `right` (upstream: state.right = state.gap.value) and this
+        // LoopBody call IS the explicit write-back; upstream then forgets the guard.
+        int end = len;
+        while (true)
+        {
+            if (right == end)
+            {
+                LoopBody(ref vBase, in pivot, cmp, ref gapPos, ref numLt, ref right,
+                    in gapValue);
+                break;
+            }
+
+            LoopBody(ref vBase, in pivot, cmp, ref gapPos, ref numLt, ref right,
+                in Unsafe.Add(ref vBase, right));
+        }
+
+        return numLt;
+    }
+
+    /// <summary>loop_body (quicksort.rs:284-295). rightVal is the element under
+    /// inspection — normally v[right]; in the final cleanup call it is the saved gap
+    /// value. One instantiation is shared by the unrolled main loop and both cleanup
+    /// cases, as upstream does to save binary size and compile-time
+    /// (quicksort.rs:332-333).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void LoopBody<T, TC>(
+        ref T vBase, in T pivot, TC cmp, ref int gapPos, ref int numLt, ref int right, in T rightVal)
+        where TC : struct, IIsLess<T>
+    {
+        bool rightIsLt = cmp.IsLess(in rightVal, in pivot);
+        int left = numLt;
+
+        // ptr::copy(left, gap.pos, 1) — read-then-write, memmove for one element.
+        T leftVal = Unsafe.Add(ref vBase, left);
+        Unsafe.Add(ref vBase, gapPos) = leftVal;
+        // ptr::copy_nonoverlapping(right, left, 1).
+        Unsafe.Add(ref vBase, left) = rightVal;
+
+        gapPos = right;
+        numLt += rightIsLt ? 1 : 0; // num_lt += right_is_lt as usize
+        right++;
+    }
+
+    /// <summary>partition_hoare_branchy_cyclic (quicksort.rs:162-242): optimized for
+    /// large types that are expensive to move and small code-gen; swaps each pair of
+    /// out-of-order elements through a single-element gap (cyclic permutation).</summary>
+    private static int PartitionHoareBranchyCyclic<T, TC>(Span<T> v, in T pivot, TC cmp)
+        where TC : struct, IIsLess<T>
+    {
+        int len = v.Length;
+        if (len == 0)
+            return 0;
+
+        ref T vBase = ref MemoryMarshal.GetReference(v);
+
+        // GapGuard (quicksort.rs:355-366) as explicit locals: gapPos is the index of
+        // the current duplicate, gapValue holds the element displaced by the first
+        // swap of the cycle. hasGap is upstream's gap_opt.is_none().
+        bool hasGap = false;
+        int gapPos = 0;
+        T gapValue = default!;
+
+        int left = 0;
+        int right = len;
+
+        while (true)
+        {
+            // Find the first element greater than the pivot (quicksort.rs:198-200).
+            while (left < right && cmp.IsLess(in Unsafe.Add(ref vBase, left), in pivot))
+                left++;
+
+            // Find the last element equal to the pivot (quicksort.rs:203-208).
+            while (true)
+            {
+                right--;
+                if (left >= right || cmp.IsLess(in Unsafe.Add(ref vBase, right), in pivot))
+                    break;
+            }
+
+            if (left >= right)
+                break;
+
+            // Swap the found pair via cyclic permutation (quicksort.rs:215-233).
+            if (!hasGap)
+            {
+                // First pair: save the displaced value, the gap starts at right.
+                gapPos = right;
+                gapValue = Unsafe.Add(ref vBase, left); // ptr::read(left)
+                hasGap = true;
+            }
+            else
+            {
+                // ptr::copy_nonoverlapping(left, gap.pos, 1) — close the previous gap.
+                T tmp = Unsafe.Add(ref vBase, left);
+                Unsafe.Add(ref vBase, gapPos) = tmp;
+            }
+
+            gapPos = right;
+            // ptr::copy_nonoverlapping(right, left, 1).
+            T rightVal = Unsafe.Add(ref vBase, right);
+            Unsafe.Add(ref vBase, left) = rightVal;
+
+            left++;
+        }
+
+        // GapGuard Drop, made explicit (quicksort.rs:360-365): overwrite the last
+        // duplicate with the value displaced by the first swap of the cycle.
+        if (hasGap)
+            Unsafe.Add(ref vBase, gapPos) = gapValue;
+
+        return left; // left.offset_from_unsigned(v_base)
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void Swap<T>(ref T a, ref T b)
+    {
+        T tmp = a;
+        a = b;
+        b = tmp;
+    }
+}
