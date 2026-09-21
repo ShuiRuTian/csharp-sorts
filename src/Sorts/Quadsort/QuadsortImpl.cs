@@ -17,37 +17,82 @@ internal static partial class QuadsortImpl
 
     /// <summary>branchless_swap: sort the pair [pta, pta+1] (quadsort.h:96-100), returning the
     /// macro's disorder flag (true when the pair was out of order). Writes both slots
-    /// unconditionally (cmov-friendly).</summary>
+    /// unconditionally. Small T (JIT-constant branch): value ternaries if-convert to
+    /// csel/cmov — actually branchless with the `&gt; 0`-shaped comparer (Comparers.cs);
+    /// large T takes an explicit branch (the value selects would duplicate whole-struct
+    /// copies through spilling).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static bool BranchlessSwap<T, TC>(ref T pta, TC cmp) where TC : struct, IIsLess<T>
     {
         var a0 = pta;
         var a1 = Unsafe.Add(ref pta, 1);
         bool gt = cmp.IsLess(in a1, in a0); // cmp(pta, pta+1) > 0
-        pta = gt ? a1 : a0;
-        Unsafe.Add(ref pta, 1) = gt ? a0 : a1;
+        if (Unsafe.SizeOf<T>() <= 16)
+        {
+            pta = gt ? a1 : a0;
+            Unsafe.Add(ref pta, 1) = gt ? a0 : a1;
+        }
+        else if (gt)
+        {
+            pta = a1;
+            Unsafe.Add(ref pta, 1) = a0;
+        }
+        else
+        {
+            pta = a0;
+            Unsafe.Add(ref pta, 1) = a1;
+        }
         return gt;
     }
 
     /// <summary>head_branchless_merge clang form: *ptd++ = cmp(ptl,ptr) &lt;= 0 ? *ptl++ : *ptr++
     /// (quadsort.h:47-49). Writes the smaller of ptl/ptr through ptd and returns true when the
-    /// left run was taken; the caller reseats its ref-local cursors (ptl/ptr/ptd) with Unsafe.Add.</summary>
+    /// left run was taken; the caller reseats its ref-local cursors (ptl/ptr/ptd) with Unsafe.Add.
+    /// Small T: value ternary (two loads + csel/cmov); large T: explicit branch (one load —
+    /// a value select would need both elements resident at once).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static bool HeadBranchlessMerge<T, TC>(ref T ptd, ref T ptl, ref T ptr, TC cmp) where TC : struct, IIsLess<T>
     {
         bool le = !cmp.IsLess(in ptr, in ptl); // cmp(ptl, ptr) <= 0
-        ptd = le ? ptl : ptr;
+        if (Unsafe.SizeOf<T>() <= 16)
+        {
+            T lv = ptl;
+            T rv = ptr;
+            ptd = le ? lv : rv;
+        }
+        else if (le)
+        {
+            ptd = ptl;
+        }
+        else
+        {
+            ptd = ptr;
+        }
         return le;
     }
 
     /// <summary>tail_branchless_merge clang form: *tpd-- = cmp(tpl,tpr) &gt; 0 ? *tpl-- : *tpr--
     /// (quadsort.h:60-62). Writes the larger of tpl/tpr through tpd and returns true when the
-    /// left run was taken; the caller reseats its ref-local cursors backward.</summary>
+    /// left run was taken; the caller reseats its ref-local cursors backward. Same small-T
+    /// value-ternary / large-T branch split as HeadBranchlessMerge.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static bool TailBranchlessMerge<T, TC>(ref T tpd, ref T tpl, ref T tpr, TC cmp) where TC : struct, IIsLess<T>
     {
         bool gt = cmp.IsLess(in tpr, in tpl); // cmp(tpl, tpr) > 0
-        tpd = gt ? tpl : tpr;
+        if (Unsafe.SizeOf<T>() <= 16)
+        {
+            T lv = tpl;
+            T rv = tpr;
+            tpd = gt ? lv : rv;
+        }
+        else if (gt)
+        {
+            tpd = tpl;
+        }
+        else
+        {
+            tpd = tpr;
+        }
         return gt;
     }
 

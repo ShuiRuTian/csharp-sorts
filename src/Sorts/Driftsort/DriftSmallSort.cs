@@ -161,43 +161,83 @@ internal static class DriftSmallSort
     }
 
     /// <summary>sort4_stable (smallsort.rs:250-305): optimal 5-comparison stable network
-    /// sorting vBase[0..4] into dst[0..4]; every element is copied exactly once. The
-    /// pointer select (smallsort.rs:298-304) becomes a conditional ref expression, which
-    /// compiles to cmov.</summary>
+    /// sorting vBase[0..4] into dst[0..4]; every element is copied exactly once.
+    /// Small T (JIT-constant branch, folded per instantiation): the pointer selects
+    /// of upstream become VALUE ternaries, which the JIT if-converts to csel/cmov —
+    /// the pointer-select shape itself would be a data-dependent branch. Large T:
+    /// the original conditional-ref selects (branchy, but avoids duplicating large
+    /// copies through value selects).</summary>
+    /// <summary>sort4_stable (smallsort.rs:250-305): optimal 5-comparison stable network
+    /// sorting vBase[0..4] into dst[0..4]; every element is copied exactly once.
+    /// Small T (JIT-constant branch, folded per instantiation): the pointer selects
+    /// of upstream become VALUE ternaries, which the JIT if-converts to csel/cmov —
+    /// the pointer-select shape itself would be a data-dependent branch. Large T:
+    /// the original conditional-ref selects (branchy, but avoids duplicating large
+    /// copies through value selects).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static void Sort4Stable<T, TC>(ref T vBase, ref T dst, TC cmp) where TC : struct, IIsLess<T>
     {
-        // Stably create two pairs a <= b and c <= d.
-        int c1 = cmp.IsLess(in Unsafe.Add(ref vBase, 1), in vBase) ? 1 : 0;
-        int c2 = cmp.IsLess(in Unsafe.Add(ref vBase, 3), in Unsafe.Add(ref vBase, 2)) ? 1 : 0;
-        ref T a = ref Unsafe.Add(ref vBase, c1);
-        ref T b = ref Unsafe.Add(ref vBase, c1 ^ 1);
-        ref T c = ref Unsafe.Add(ref vBase, 2 + c2);
-        ref T d = ref Unsafe.Add(ref vBase, 2 + (c2 ^ 1));
+        if (Unsafe.SizeOf<T>() <= 16)
+        {
+            // Stably create two pairs a <= b and c <= d.
+            int c1 = cmp.IsLess(in Unsafe.Add(ref vBase, 1), in vBase) ? 1 : 0;
+            int c2 = cmp.IsLess(in Unsafe.Add(ref vBase, 3), in Unsafe.Add(ref vBase, 2)) ? 1 : 0;
+            T a = Unsafe.Add(ref vBase, c1);
+            T b = Unsafe.Add(ref vBase, c1 ^ 1);
+            T c = Unsafe.Add(ref vBase, 2 + c2);
+            T d = Unsafe.Add(ref vBase, 2 + (c2 ^ 1));
 
-        // Compare (a, c) and (b, d) to identify max/min. We're left with two
-        // unknown elements, but because we are a stable sort we must know which
-        // one is leftmost and which one is rightmost.
-        // c3, c4 | min max unk_left unk_right
-        //  0,  0 |  a   d    b         c
-        //  0,  1 |  a   b    c         d
-        //  1,  0 |  c   d    a         b
-        //  1,  1 |  c   b    a         d
-        bool c3 = cmp.IsLess(in c, in a);
-        bool c4 = cmp.IsLess(in d, in b);
-        ref T min = ref (c3 ? ref c : ref a);
-        ref T max = ref (c4 ? ref b : ref d);
-        ref T unkLeft = ref (c3 ? ref a : ref (c4 ? ref c : ref b));
-        ref T unkRight = ref (c4 ? ref d : ref (c3 ? ref b : ref c));
+            // Compare (a, c) and (b, d) to identify max/min. We're left with two
+            // unknown elements, but because we are a stable sort we must know which
+            // one is leftmost and which one is rightmost.
+            // c3, c4 | min max unk_left unk_right
+            //  0,  0 |  a   d    b         c
+            //  0,  1 |  a   b    c         d
+            //  1,  0 |  c   d    a         b
+            //  1,  1 |  c   b    a         d
+            bool c3 = cmp.IsLess(in c, in a);
+            bool c4 = cmp.IsLess(in d, in b);
+            T min = c3 ? c : a;
+            T max = c4 ? b : d;
+            T unkLeft = c3 ? a : (c4 ? c : b);
+            T unkRight = c4 ? d : (c3 ? b : c);
 
-        // Sort the last two unknown elements.
-        bool c5 = cmp.IsLess(in unkRight, in unkLeft);
-        ref T lo = ref (c5 ? ref unkRight : ref unkLeft);
-        ref T hi = ref (c5 ? ref unkLeft : ref unkRight);
+            // Sort the last two unknown elements.
+            bool c5 = cmp.IsLess(in unkRight, in unkLeft);
+            T lo = c5 ? unkRight : unkLeft;
+            T hi = c5 ? unkLeft : unkRight;
 
-        dst = min;
-        Unsafe.Add(ref dst, 1) = lo;
-        Unsafe.Add(ref dst, 2) = hi;
-        Unsafe.Add(ref dst, 3) = max;
+            dst = min;
+            Unsafe.Add(ref dst, 1) = lo;
+            Unsafe.Add(ref dst, 2) = hi;
+            Unsafe.Add(ref dst, 3) = max;
+        }
+        else
+        {
+            // Stably create two pairs a <= b and c <= d.
+            int c1 = cmp.IsLess(in Unsafe.Add(ref vBase, 1), in vBase) ? 1 : 0;
+            int c2 = cmp.IsLess(in Unsafe.Add(ref vBase, 3), in Unsafe.Add(ref vBase, 2)) ? 1 : 0;
+            ref T a = ref Unsafe.Add(ref vBase, c1);
+            ref T b = ref Unsafe.Add(ref vBase, c1 ^ 1);
+            ref T c = ref Unsafe.Add(ref vBase, 2 + c2);
+            ref T d = ref Unsafe.Add(ref vBase, 2 + (c2 ^ 1));
+
+            bool c3 = cmp.IsLess(in c, in a);
+            bool c4 = cmp.IsLess(in d, in b);
+            ref T min = ref (c3 ? ref c : ref a);
+            ref T max = ref (c4 ? ref b : ref d);
+            ref T unkLeft = ref (c3 ? ref a : ref (c4 ? ref c : ref b));
+            ref T unkRight = ref (c4 ? ref d : ref (c3 ? ref b : ref c));
+
+            bool c5 = cmp.IsLess(in unkRight, in unkLeft);
+            ref T lo = ref (c5 ? ref unkRight : ref unkLeft);
+            ref T hi = ref (c5 ? ref unkLeft : ref unkRight);
+
+            dst = min;
+            Unsafe.Add(ref dst, 1) = lo;
+            Unsafe.Add(ref dst, 2) = hi;
+            Unsafe.Add(ref dst, 3) = max;
+        }
     }
 
     /// <summary>sort8_stable (smallsort.rs:310-327): sorts vBase[0..8] into dst[0..8] via
@@ -211,7 +251,12 @@ internal static class DriftSmallSort
 
     /// <summary>merge_up (smallsort.rs:329-360): branchless single-element merge step —
     /// the lesser of src[left]/src[right] (ties left) goes to dst[outPos], exactly one of
-    /// the two read cursors advances.</summary>
+    /// the two read cursors advances. KEPT AS UPSTREAM: inside BidirectionalMerge's loop
+    /// RyuJIT neither if-converts the pick (it stays a data-dependent branch either way,
+    /// JitDisasm-verified) nor eliminates the double load a locals-based value-ternary
+    /// pick introduces — the re-read costs measurably more than the branch it replaces
+    /// (BaselineBench int Random 100k: +9% DriftSort). The conditional-ref pick reads
+    /// each element exactly once.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void SmallMergeUp<T, TC>(ref T src, ref T dst, ref int left, ref int right, ref int outPos, TC cmp)
         where TC : struct, IIsLess<T>
@@ -226,7 +271,8 @@ internal static class DriftSmallSort
 
     /// <summary>merge_down (smallsort.rs:362-393): the mirrored step at the back — the
     /// greater of src[leftRev]/src[rightRev] (ties right) goes to dst[outRev], exactly one
-    /// of the two read cursors retreats.</summary>
+    /// of the two read cursors retreats. Kept as upstream for the same measured reason
+    /// as SmallMergeUp.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void SmallMergeDown<T, TC>(ref T src, ref T dst, ref int leftRev, ref int rightRev, ref int outRev, TC cmp)
         where TC : struct, IIsLess<T>
@@ -266,8 +312,17 @@ internal static class DriftSmallSort
         if (len % 2 != 0)
         {
             bool leftNonempty = left < leftEnd;
-            ref T lastSrc = ref (leftNonempty ? ref Unsafe.Add(ref src, left) : ref Unsafe.Add(ref src, right));
-            Unsafe.Add(ref dst, outPos) = lastSrc;
+            if (Unsafe.SizeOf<T>() <= 16)
+            {
+                T lv = Unsafe.Add(ref src, left);
+                T rv = Unsafe.Add(ref src, right);
+                Unsafe.Add(ref dst, outPos) = leftNonempty ? lv : rv;
+            }
+            else
+            {
+                ref T lastSrc = ref (leftNonempty ? ref Unsafe.Add(ref src, left) : ref Unsafe.Add(ref src, right));
+                Unsafe.Add(ref dst, outPos) = lastSrc;
+            }
             left += leftNonempty ? 1 : 0;
             right += leftNonempty ? 0 : 1;
         }

@@ -175,20 +175,29 @@ internal static class GlideMerge
             ref T r = ref MemoryMarshal.GetReference(_right);
             ref T d = ref MemoryMarshal.GetReference(_dst);
             bool rightLess = cmp.IsLess(in Unsafe.Add(ref r, _rightBegin), in Unsafe.Add(ref l, _leftBegin));
-            // Branchless store-select (upstream's ptr::select + copy_nonoverlapping),
-            // mirroring DriftMerge.MergeUp: one conditional-ref source, one store,
-            // cursor advance via integer arithmetic (ties stay towards left).
-            ref T srcBegin = ref rightLess
-                ? ref Unsafe.Add(ref r, _rightBegin)
-                : ref Unsafe.Add(ref l, _leftBegin);
-            Unsafe.Add(ref d, _dstBegin) = srcBegin;
+            // Small T (JIT-constant branch): value ternary — two loads + csel/cmov +
+            // one store (upstream's ptr::select is a VALUE select in LLVM); large T
+            // keeps the conditional-ref source select (one load behind a branch, no
+            // duplicated copies).
+            if (Unsafe.SizeOf<T>() <= 16)
+            {
+                T lv = Unsafe.Add(ref l, _leftBegin);
+                T rv = Unsafe.Add(ref r, _rightBegin);
+                Unsafe.Add(ref d, _dstBegin) = rightLess ? rv : lv;
+            }
+            else
+            {
+                ref T srcBegin = ref rightLess
+                    ? ref Unsafe.Add(ref r, _rightBegin)
+                    : ref Unsafe.Add(ref l, _leftBegin);
+                Unsafe.Add(ref d, _dstBegin) = srcBegin;
+            }
             _dstBegin++;
-            // Materialized 0/1 (not ternary): RyuJIT's Arm64 if-conversion turns
-            // `+= cond ? 1 : 0` back into branches; byte-reinterpretation forces
-            // the cset + pure arithmetic — actually branchless (JitDisasm-verified).
-            int rl = Unsafe.As<bool, byte>(ref rightLess);
-            _rightBegin += rl;
-            _leftBegin += 1 - rl;
+            // Plain ternary cursor updates (cset+add, JitDisasm-verified with the
+            // `&gt; 0`-shaped comparer in Comparers.cs; the former Unsafe.As
+            // materialization re-branches the pick above).
+            _rightBegin += rightLess ? 1 : 0;
+            _leftBegin += rightLess ? 0 : 1;
         }
 
         /// <summary>branchless_merge_one_at_end (branchless_merge.rs:229-245): merge the
@@ -201,18 +210,25 @@ internal static class GlideMerge
             ref T d = ref MemoryMarshal.GetReference(_dst);
             bool rightLess = cmp.IsLess(in Unsafe.Add(ref r, _rightEnd - 1), in Unsafe.Add(ref l, _leftEnd - 1));
             _dstEnd--;
-            // Branchless store-select mirroring DriftMerge.MergeDown: one
-            // conditional-ref source, one store, integer-arithmetic cursor
-            // retreat (ties stay towards right).
-            ref T srcEnd = ref rightLess
-                ? ref Unsafe.Add(ref l, _leftEnd - 1)
-                : ref Unsafe.Add(ref r, _rightEnd - 1);
-            Unsafe.Add(ref d, _dstEnd) = srcEnd;
-            // See MergeOneAtBegin: materialized 0/1 keeps the retreat arithmetic
-            // branchless under RyuJIT.
-            int rlEnd = Unsafe.As<bool, byte>(ref rightLess);
-            _leftEnd -= rlEnd;
-            _rightEnd -= 1 - rlEnd;
+            // Same small-T value-ternary / large-T ref-ternary split as
+            // MergeOneAtBegin: the greater of the two backs (ties right) goes to
+            // dst's back.
+            if (Unsafe.SizeOf<T>() <= 16)
+            {
+                T lv = Unsafe.Add(ref l, _leftEnd - 1);
+                T rv = Unsafe.Add(ref r, _rightEnd - 1);
+                Unsafe.Add(ref d, _dstEnd) = rightLess ? lv : rv;
+            }
+            else
+            {
+                ref T srcEnd = ref rightLess
+                    ? ref Unsafe.Add(ref l, _leftEnd - 1)
+                    : ref Unsafe.Add(ref r, _rightEnd - 1);
+                Unsafe.Add(ref d, _dstEnd) = srcEnd;
+            }
+            // Plain ternary cursor retreats — see MergeOneAtBegin.
+            _leftEnd -= rightLess ? 1 : 0;
+            _rightEnd -= rightLess ? 0 : 1;
         }
 
         /// <summary>symmetric_merge_successful (branchless_merge.rs:280-284): left_begin ==

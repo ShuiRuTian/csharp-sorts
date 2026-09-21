@@ -197,24 +197,25 @@ internal static class IpnSmallSort
     }
 
     /// <summary>swap_if_less (smallsort.rs:294-325): swap vBase[aPos] and vBase[bPos]
-    /// if the value at bPos is strictly less than the one at aPos. Branchless — the
-    /// goal is cmov codegen; equal values never swap (is_less is false for equal).</summary>
+    /// if the value at bPos is strictly less than the one at aPos. Branchless — value
+    /// ternaries over the two loads; the JIT if-converts these to csel/cmov for the
+    /// small T this network path serves (sizeof &lt;= 8, so the value copies are free).
+    /// NOTE: the former conditional-REF form (`ref (shouldSwap ? ref vB : ref vA)`)
+    /// always compiled to a data-dependent branch on both x64 and ARM64 — Roslyn
+    /// lowers conditional ref expressions to IL control flow and RyuJIT never
+    /// if-converts a byref select. JitDisasm-verified.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void SwapIfLess<T, TC>(ref T vBase, int aPos, int bPos, TC cmp) where TC : struct, IIsLess<T>
     {
-        ref T vA = ref Unsafe.Add(ref vBase, aPos);
-        ref T vB = ref Unsafe.Add(ref vBase, bPos);
+        T vA = Unsafe.Add(ref vBase, aPos);
+        T vB = Unsafe.Add(ref vBase, bPos);
 
         bool shouldSwap = cmp.IsLess(in vB, in vA);
 
-        // The equivalent code with a branch would be `if (shouldSwap) swap(v_a, v_b)`
-        // (smallsort.rs:313-316); conditional ref expressions are branchless selects.
-        ref T leftSwap = ref (shouldSwap ? ref vB : ref vA);
-        ref T rightSwap = ref (shouldSwap ? ref vA : ref vB);
-
-        T rightSwapTmp = rightSwap; // ManuallyDrop::new(ptr::read(right_swap))
-        vA = leftSwap;              // ptr::copy(left_swap, v_a, 1)
-        vB = rightSwapTmp;          // ptr::copy_nonoverlapping(&*right_swap_tmp, v_b, 1)
+        // Value selects mirroring upstream's if-let value swap (smallsort.rs:313-316):
+        // equal values never swap (is_less is false for equal).
+        Unsafe.Add(ref vBase, aPos) = shouldSwap ? vB : vA;
+        Unsafe.Add(ref vBase, bPos) = shouldSwap ? vA : vB;
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]

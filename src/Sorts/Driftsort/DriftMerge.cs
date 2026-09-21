@@ -102,9 +102,12 @@ internal static class DriftMerge
             _dst = dstOff;
         }
 
-        /// <summary>merge_up (merge.rs:75-95): forward branchless merge of the saved run
+                /// <summary>merge_up (merge.rs:75-95): forward branchless merge of the saved run
         /// against v[right..rightEnd] — the lesser of the two fronts (ties left) goes to
-        /// v[dst], advancing exactly one cursor.</summary>
+        /// v[dst], advancing exactly one cursor. KEPT AS UPSTREAM (conditional-ref pick):
+        /// inside this loop RyuJIT neither if-converts a value-ternary pick nor
+        /// eliminates its double loads — measured slower than the branchy single-load
+        /// pick (BaselineBench int Random 100k).</summary>
         internal void MergeUp<TC>(int right, int rightEnd, TC cmp) where TC : struct, IIsLess<T>
         {
             while (_start != _end && right != rightEnd)
@@ -123,7 +126,8 @@ internal static class DriftMerge
         /// <summary>merge_down (merge.rs:97-121): backward branchless merge from v's end —
         /// the greater of the two backs (ties to the back, keeping stability) goes to
         /// v[outIdx], retreating exactly one cursor. leftEnd and rightEnd are the stop
-        /// boundaries (v_base and buf respectively, both offset 0).</summary>
+        /// boundaries (v_base and buf respectively, both offset 0). Kept as upstream for
+        /// the same measured reason as MergeUp.</summary>
         internal void MergeDown<TC>(int leftEnd, int rightEnd, int outEnd, TC cmp) where TC : struct, IIsLess<T>
         {
             int outIdx = outEnd;

@@ -22,42 +22,81 @@ internal static class GlideSmallSort
         => BlockInsertionSort(el, cmp);
 
     /// <summary>sort4_raw (small_sort.rs:11-50): optimal 5-comparison stable network sorting
-    /// four elements from src into dst. src and dst must not overlap.</summary>
+    /// four elements from src into dst. src and dst must not overlap. Small T
+    /// (JIT-constant branch): VALUE ternary selects, if-converted to csel/cmov —
+    /// JitDisasm-verified (see Comparers.cs for the `&gt; 0`-shape requirement);
+    /// large T keeps the conditional-ref selects (branchy, no duplicated copies).
+    /// Same split as DriftSmallSort.Sort4Stable.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static void Sort4Raw<T, TC>(ref T srcp, ref T dstp, TC cmp) where TC : struct, IIsLess<T>
     {
-        // Stably create two pairs a <= b and c <= d.
-        int c1 = cmp.IsLess(in Unsafe.Add(ref srcp, 1), in srcp) ? 1 : 0;
-        int c2 = cmp.IsLess(in Unsafe.Add(ref srcp, 3), in Unsafe.Add(ref srcp, 2)) ? 1 : 0;
-        ref T a = ref Unsafe.Add(ref srcp, c1);
-        ref T b = ref Unsafe.Add(ref srcp, c1 ^ 1);
-        ref T c = ref Unsafe.Add(ref srcp, 2 + c2);
-        ref T d = ref Unsafe.Add(ref srcp, 2 + (c2 ^ 1));
+        if (Unsafe.SizeOf<T>() <= 16)
+        {
+            // Stably create two pairs a <= b and c <= d.
+            int c1 = cmp.IsLess(in Unsafe.Add(ref srcp, 1), in srcp) ? 1 : 0;
+            int c2 = cmp.IsLess(in Unsafe.Add(ref srcp, 3), in Unsafe.Add(ref srcp, 2)) ? 1 : 0;
+            T a = Unsafe.Add(ref srcp, c1);
+            T b = Unsafe.Add(ref srcp, c1 ^ 1);
+            T c = Unsafe.Add(ref srcp, 2 + c2);
+            T d = Unsafe.Add(ref srcp, 2 + (c2 ^ 1));
 
-        // Compare (a, c) and (b, d) to identify max/min. We're left with two
-        // unknown elements, but because we are a stable sort we must know which
-        // one is leftmost and which one is rightmost.
-        // c3, c4 | min max unk_left unk_right
-        //  0,  0 |  a   d    b         c
-        //  0,  1 |  a   b    c         d
-        //  1,  0 |  c   d    a         b
-        //  1,  1 |  c   b    a         d
-        bool c3 = cmp.IsLess(in c, in a);
-        bool c4 = cmp.IsLess(in d, in b);
-        ref T min = ref (c3 ? ref c : ref a);
-        ref T max = ref (c4 ? ref b : ref d);
-        ref T unkLeft = ref (c3 ? ref a : ref (c4 ? ref c : ref b));
-        ref T unkRight = ref (c4 ? ref d : ref (c3 ? ref b : ref c));
+            // Compare (a, c) and (b, d) to identify max/min. We're left with two
+            // unknown elements, but because we are a stable sort we must know which
+            // one is leftmost and which one is rightmost.
+            // c3, c4 | min max unk_left unk_right
+            //  0,  0 |  a   d    b         c
+            //  0,  1 |  a   b    c         d
+            //  1,  0 |  c   d    a         b
+            //  1,  1 |  c   b    a         d
+            bool c3 = cmp.IsLess(in c, in a);
+            bool c4 = cmp.IsLess(in d, in b);
+            T min = c3 ? c : a;
+            T max = c4 ? b : d;
+            T unkLeft = c3 ? a : (c4 ? c : b);
+            T unkRight = c4 ? d : (c3 ? b : c);
 
-        // Sort the last two unknown elements.
-        bool c5 = cmp.IsLess(in unkRight, in unkLeft);
-        ref T lo = ref (c5 ? ref unkRight : ref unkLeft);
-        ref T hi = ref (c5 ? ref unkLeft : ref unkRight);
+            // Sort the last two unknown elements.
+            bool c5 = cmp.IsLess(in unkRight, in unkLeft);
+            T lo = c5 ? unkRight : unkLeft;
+            T hi = c5 ? unkLeft : unkRight;
 
-        dstp = min;
-        Unsafe.Add(ref dstp, 1) = lo;
-        Unsafe.Add(ref dstp, 2) = hi;
-        Unsafe.Add(ref dstp, 3) = max;
+            dstp = min;
+            Unsafe.Add(ref dstp, 1) = lo;
+            Unsafe.Add(ref dstp, 2) = hi;
+            Unsafe.Add(ref dstp, 3) = max;
+        }
+        else
+        {
+            // Stably create two pairs a <= b and c <= d.
+            int c1 = cmp.IsLess(in Unsafe.Add(ref srcp, 1), in srcp) ? 1 : 0;
+            int c2 = cmp.IsLess(in Unsafe.Add(ref srcp, 3), in Unsafe.Add(ref srcp, 2)) ? 1 : 0;
+            ref T a = ref Unsafe.Add(ref srcp, c1);
+            ref T b = ref Unsafe.Add(ref srcp, c1 ^ 1);
+            ref T c = ref Unsafe.Add(ref srcp, 2 + c2);
+            ref T d = ref Unsafe.Add(ref srcp, 2 + (c2 ^ 1));
+
+            // c3, c4 | min max unk_left unk_right
+            //  0,  0 |  a   d    b         c
+            //  0,  1 |  a   b    c         d
+            //  1,  0 |  c   d    a         b
+            //  1,  1 |  c   b    a         d
+            bool c3 = cmp.IsLess(in c, in a);
+            bool c4 = cmp.IsLess(in d, in b);
+            ref T min = ref (c3 ? ref c : ref a);
+            ref T max = ref (c4 ? ref b : ref d);
+            ref T unkLeft = ref (c3 ? ref a : ref (c4 ? ref c : ref b));
+            ref T unkRight = ref (c4 ? ref d : ref (c3 ? ref b : ref c));
+
+            // Sort the last two unknown elements.
+            bool c5 = cmp.IsLess(in unkRight, in unkLeft);
+            ref T lo = ref (c5 ? ref unkRight : ref unkLeft);
+            ref T hi = ref (c5 ? ref unkLeft : ref unkRight);
+
+            dstp = min;
+            Unsafe.Add(ref dstp, 1) = lo;
+            Unsafe.Add(ref dstp, 2) = hi;
+            Unsafe.Add(ref dstp, 3) = max;
+        }
     }
 
     /// <summary>sort4_into (small_sort.rs:245-259): sorts src[0..4] into dst[0..4] via scratch.
