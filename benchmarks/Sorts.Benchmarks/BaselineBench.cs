@@ -11,7 +11,6 @@ namespace Sorts.Benchmarks;
 /// Comparison variants show the interface/virtual-dispatch tax; Linq_OrderBy shows
 /// the stability tax (it allocates its output array, by design).</summary>
 [Config(typeof(BenchConfig))]
-[InvocationCount(Ring.Size)]
 public class BaselineBench : SortMatrixBase<int>
 {
     private static readonly Comparison<int> IntComparison = CompareKeys;
@@ -31,20 +30,19 @@ public class BaselineBench : SortMatrixBase<int>
     // additional baseline entry points.
 
     [Benchmark]
-    public void ArraySort_IComparer() => Array.Sort(Next(), PlainIntComparer.Instance);
+    public void ArraySort_IComparer() => Array.Sort(Fresh(), PlainIntComparer.Instance);
 
     [Benchmark]
-    public void ArraySort_Comparison() => Array.Sort(Next(), IntComparison);
+    public void ArraySort_Comparison() => Array.Sort(Fresh(), IntComparison);
 
     [Benchmark]
-    public void Linq_OrderBy() => Next().OrderBy(x => x).ToArray();
+    public void Linq_OrderBy() => Template.OrderBy(x => x).ToArray();
 }
 
 /// <summary>Pair variant: struct-with-payload (int Key + int Payload) at Random
 /// 100k. Array.Sort (unstable) and Ipnsort (unstable) vs LINQ OrderBy — the
 /// stable-sort cost of moving 8-byte records instead of bare ints.</summary>
 [Config(typeof(BenchConfig))]
-[InvocationCount(Ring.Size)]
 public class PairBench : SortMatrixBase<Pair>
 {
     [Params(Distribution.Random)]
@@ -57,5 +55,5 @@ public class PairBench : SortMatrixBase<Pair>
     public void Setup() => Init(DataGen.Pairs(Dist, N, Seed));
 
     [Benchmark]
-    public void Linq_OrderBy() => Next().OrderBy(x => x.Key).ToArray();
+    public void Linq_OrderBy() => Template.OrderBy(x => x.Key).ToArray();
 }

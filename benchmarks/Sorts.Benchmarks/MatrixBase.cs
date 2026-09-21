@@ -1,48 +1,67 @@
 using System;
-using System.Collections.Generic;
 using BenchmarkDotNet.Attributes;
 using Sorts.TestData;
 
 namespace Sorts.Benchmarks;
 
-/// <summary>Ring size = InvocationCount (invocations per iteration). One constant shared
-/// by every benchmark class so the fresh-data math in RingData's doc comment holds
-/// everywhere (see RingData.cs for the full derivation).
+/// <summary>Shared plumbing for the matrices: template init + the two benchmark methods
+/// (Array.Sort baseline + Ipnsort). Derived classes declare the [Params] and build the
+/// template in [GlobalSetup] via Init.
 ///
-/// Note on OperationsPerInvoke: BenchmarkDotNet 0.15.4 removed the standalone
-/// [OperationsPerInvoke] attribute (it is now a [Benchmark] property) and computes
-/// totalOperations = InvocationCount × OperationsPerInvoke. One invocation here sorts
-/// exactly one array, so per-operation reporting == per-sort reporting requires the
-/// default OperationsPerInvoke = 1; setting it to 64 would divide every reported time
-/// and allocation by 64. Hence [InvocationCount(Ring.Size)] alone.</summary>
-internal static class Ring
-{
-    public const int Size = 64;
-}
-
-/// <summary>Shared plumbing for the three matrices: template init + the two benchmark
-/// methods (Array.Sort baseline + Ipnsort). Derived classes declare the
-/// [Params] and build the template in [GlobalSetup] via Init. Every invocation
-/// consumes one fresh clone from the ring — no IterationSetup (see RingData.cs).</summary>
+/// Destructive-input handling follows the dotnet/performance convention for in-place
+/// sorts (the Sorting&lt;T&gt; benchmark in the "Performance Improvements in .NET 5"
+/// post): [GlobalSetup] keeps an immutable unsorted template plus one working array,
+/// and every [Benchmark] invocation copies the template into the working array before
+/// sorting it. The copy sits inside the measured region and is identical for every
+/// compared method, so the comparison stays fair.
+///
+/// No ring and no pinned InvocationCount here: leaving InvocationCount unset is what
+/// lets BDN auto-scale invocations per iteration to its target iteration time, which in
+/// turn is what fully warms the JIT for small inputs. (The former ring-of-64 with
+/// [InvocationCount(Ring.Size)] pinned the count, so tiny-N cases whose short loops
+/// promote slowly stopped at Tier0/partially-optimized code and reported ~10x too
+/// slow.)</summary>
 public abstract class SortMatrixBase<T> where T : IComparable<T>
 {
     protected const int Seed = 20260918; // fixed for reproducibility across runs
 
-    private RingData<T> _ring = null!;
+    private T[] _template = null!;
+    private T[] _work = null!;
 
-    /// <summary>Builds the 64-slot ring from an unsorted template. Call once from
-    /// GlobalSetup, after params are populated.</summary>
-    protected void Init(T[] template) => _ring = new RingData<T>(template, Ring.Size);
+    /// <summary>Stores the immutable unsorted template and allocates the working array.
+    /// Call once from GlobalSetup, after params are populated.</summary>
+    protected void Init(T[] template)
+    {
+        _template = template;
+        _work = new T[template.Length];
+    }
 
-    /// <summary>Next fresh clone — for extra benchmark methods declared by derived
-    /// classes (the base's own four methods call the ring directly).</summary>
-    protected T[] Next() => _ring.Next();
+    /// <summary>The immutable unsorted template — read-only source for non-destructive
+    /// benchmarks (e.g. LINQ OrderBy).</summary>
+    protected T[] Template => _template;
+
+    /// <summary>Copies the template into the working array and returns it — the
+    /// per-invocation fresh-input step for destructive benchmark methods declared by
+    /// derived classes (the base's own methods inline the same copy).</summary>
+    protected T[] Fresh()
+    {
+        _template.AsSpan().CopyTo(_work);
+        return _work;
+    }
 
     [Benchmark(Baseline = true)]
-    public void ArraySort_Generic() => Array.Sort(_ring.Next());
+    public void ArraySort_Generic()
+    {
+        _template.AsSpan().CopyTo(_work);
+        Array.Sort(_work);
+    }
 
     [Benchmark]
-    public void Ipnsort() => Sorts.Ipnsort.Sort(_ring.Next());
+    public void Ipnsort()
+    {
+        _template.AsSpan().CopyTo(_work);
+        Sorts.Ipnsort.Sort(_work);
+    }
 }
 
 /// <summary>Core matrix: all 12 distributions × 2 sizes × 2 implementations — the main
@@ -50,7 +69,6 @@ public abstract class SortMatrixBase<T> where T : IComparable<T>
 /// point was cut: 4MB working sets exceed realistic sort payloads and dominated
 /// the run; the scaling curve lives in ScalingBench.</summary>
 [Config(typeof(BenchConfig))]
-[InvocationCount(Ring.Size)]
 public class CoreMatrixBench : SortMatrixBase<int>
 {
     // Enumerated [Params] (same set as Enum.GetValues<Distribution>) rather than

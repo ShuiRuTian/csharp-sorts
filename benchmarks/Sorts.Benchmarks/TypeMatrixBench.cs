@@ -12,7 +12,6 @@ public class TypeMatrixBench
 {
     /// <summary>int[] — the 4-byte baseline element.</summary>
     [Config(typeof(BenchConfig))]
-    [InvocationCount(Ring.Size)]
     public class TypeMatrixInt : SortMatrixBase<int>
     {
         [Params(Distribution.Random, Distribution.RandomD20, Distribution.RandomS95, Distribution.Zipfian)]
@@ -27,7 +26,6 @@ public class TypeMatrixBench
 
     /// <summary>double[] — 8-byte element with NaNs in the Random pattern.</summary>
     [Config(typeof(BenchConfig))]
-    [InvocationCount(Ring.Size)]
     public class TypeMatrixDouble : SortMatrixBase<double>
     {
         [Params(Distribution.Random, Distribution.RandomD20, Distribution.RandomS95, Distribution.Zipfian)]
@@ -43,7 +41,6 @@ public class TypeMatrixBench
     /// <summary>string[] — reference element: compares cost memory traffic, pointer
     /// swaps and (for adaptive sorts) cheap movement of refs.</summary>
     [Config(typeof(BenchConfig))]
-    [InvocationCount(Ring.Size)]
     public class TypeMatrixString : SortMatrixBase<string>
     {
         [Params(Distribution.Random, Distribution.RandomD20, Distribution.RandomS95, Distribution.Zipfian)]
@@ -58,7 +55,6 @@ public class TypeMatrixBench
 
     /// <summary>Struct16[] — 16-byte unmanaged key+payload (see BenchTypes.cs).</summary>
     [Config(typeof(BenchConfig))]
-    [InvocationCount(Ring.Size)]
     public class TypeMatrixStruct16 : SortMatrixBase<Struct16>
     {
         [Params(Distribution.Random, Distribution.RandomD20, Distribution.RandomS95, Distribution.Zipfian)]
@@ -75,7 +71,6 @@ public class TypeMatrixBench
     /// <summary>Struct128[] — 128-byte unmanaged record, compare-by-Key only: copies
     /// are expensive, exercising the memmove-heavy large-element paths.</summary>
     [Config(typeof(BenchConfig))]
-    [InvocationCount(Ring.Size)]
     public class TypeMatrixStruct128 : SortMatrixBase<Struct128>
     {
         [Params(Distribution.Random, Distribution.RandomD20, Distribution.RandomS95, Distribution.Zipfian)]

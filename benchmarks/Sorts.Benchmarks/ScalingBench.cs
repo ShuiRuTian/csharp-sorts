@@ -10,7 +10,6 @@ namespace Sorts.Benchmarks;
 /// were cut — 4-40MB working sets are far outside realistic sort payloads and
 /// dominated the whole run.)</summary>
 [Config(typeof(BenchConfig))]
-[InvocationCount(Ring.Size)]
 public class ScalingBench : SortMatrixBase<int>
 {
     [Params(10, 20, 50, 100, 200, 500,
