@@ -78,12 +78,16 @@ internal static class IpnPartition
 
         // Place the pivot between the two partitions (quicksort.rs:145).
         Swap(ref v[0], ref v[numLt]);
-        return numLt;
+        return (int)numLt;
     }
 
     /// <summary>partition_lomuto_branchless_cyclic (quicksort.rs:254-353). Novel
     /// partition by Lukas Bergdoll and Orson Peters: branchless Lomuto partition
-    /// paired with a cyclic permutation.</summary>
+    /// paired with a cyclic permutation. The scan cursors are nint (64-bit) — the
+    /// C# analog of upstream's usize-based raw pointers: RyuJIT's x64 address modes
+    /// need a 64-bit index, and int cursors force a movsxd sign-extension per
+    /// element access in this hot loop (JitDisasm-verified; ARM64 hides the cost
+    /// in its 64-bit registers, x64 does not).</summary>
     private static int PartitionLomutoBranchlessCyclic<T, TC>(Span<T> v, T pivot, TC cmp)
         where TC : struct, IIsLess<T>
     {
@@ -96,30 +100,33 @@ internal static class IpnPartition
         // The gap value (quicksort.rs:302): ptr::read(v_base) — a value copy held
         // outside the array. Upstream wraps it in ManuallyDrop + GapGuardRaw; here
         // it is a plain local whose write-back is the is_done LoopBody call below.
+        // Upstream's GapGuardRaw carries an explicit `pos` cursor; in this port it
+        // is always right - 1 (the gap is seated at the previous scan element, and
+        // right advances by exactly one per op), so the cursor is folded away and
+        // LoopBody derives it — one less live register and one less move per element.
         T gapValue = vBase;
 
-        int gapPos = 0;   // gap.pos — index of the current duplicate; starts at v_base.
-        int numLt = 0;
-        int right = 1;
+        nint numLt = 0;
+        nint right = 1;
 
         // Manual unrolling (quicksort.rs:316-330): 2 for sizeof <= 16, else 1.
         int unrollLen = Unsafe.SizeOf<T>() <= 16 ? 2 : 1;
-        int unrollEnd = len - (unrollLen - 1);
+        nint unrollEnd = len - (unrollLen - 1);
 
         if (unrollLen == 2)
         {
             while (right < unrollEnd)
             {
-                LoopBody(ref vBase, pivot, cmp, ref gapPos, ref numLt, ref right,
+                LoopBody(ref vBase, pivot, cmp, ref numLt, ref right,
                     Unsafe.Add(ref vBase, right));
-                LoopBody(ref vBase, pivot, cmp, ref gapPos, ref numLt, ref right,
+                LoopBody(ref vBase, pivot, cmp, ref numLt, ref right,
                     Unsafe.Add(ref vBase, right));
             }
         }
         else
         {
             while (right < unrollEnd)
-                LoopBody(ref vBase, pivot, cmp, ref gapPos, ref numLt, ref right,
+                LoopBody(ref vBase, pivot, cmp, ref numLt, ref right,
                     Unsafe.Add(ref vBase, right));
         }
 
@@ -127,20 +134,20 @@ internal static class IpnPartition
         // and the final write-back of the gap value. When is_done, the saved gap
         // value acts as `right` (upstream: state.right = state.gap.value) and this
         // LoopBody call IS the explicit write-back; upstream then forgets the guard.
-        int end = len;
+        nint end = len;
         while (true)
         {
             if (right == end)
             {
-                LoopBody(ref vBase, pivot, cmp, ref gapPos, ref numLt, ref right, gapValue);
+                LoopBody(ref vBase, pivot, cmp, ref numLt, ref right, gapValue);
                 break;
             }
 
-            LoopBody(ref vBase, pivot, cmp, ref gapPos, ref numLt, ref right,
+            LoopBody(ref vBase, pivot, cmp, ref numLt, ref right,
                 Unsafe.Add(ref vBase, right));
         }
 
-        return numLt;
+        return (int)numLt;
     }
 
     /// <summary>loop_body (quicksort.rs:284-295). rightVal is the element under
@@ -149,22 +156,25 @@ internal static class IpnPartition
     /// cases, as upstream does to save binary size and compile-time
     /// (quicksort.rs:332-333). pivot and rightVal are by-value: inlined they are
     /// plain locals, keeping the pivot in a register and loading rightVal once
-    /// (see the class header, divergences 2 and 3).</summary>
+    /// (see the class header, divergences 2 and 3). The cursors are nint — see
+    /// PartitionLomutoBranchlessCyclic — and the gap position is right - 1 (see the
+    /// gap-value note there), so only numLt and right are live.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void LoopBody<T, TC>(
-        ref T vBase, T pivot, TC cmp, ref int gapPos, ref int numLt, ref int right, T rightVal)
+        ref T vBase, T pivot, TC cmp, ref nint numLt, ref nint right, T rightVal)
         where TC : struct, IIsLess<T>
     {
         bool rightIsLt = cmp.IsLess(in rightVal, in pivot);
-        int left = numLt;
+        nint left = numLt;
 
         // ptr::copy(left, gap.pos, 1) — read-then-write, memmove for one element.
+        // gap.pos == right - 1 (invariant: the previous op seated the gap at its
+        // scan element, which this op's right has since advanced past).
         T leftVal = Unsafe.Add(ref vBase, left);
-        Unsafe.Add(ref vBase, gapPos) = leftVal;
+        Unsafe.Add(ref vBase, right - 1) = leftVal;
         // ptr::copy_nonoverlapping(right, left, 1).
         Unsafe.Add(ref vBase, left) = rightVal;
 
-        gapPos = right;
         numLt += rightIsLt ? 1 : 0; // num_lt += right_is_lt as usize
         right++;
     }
@@ -185,11 +195,14 @@ internal static class IpnPartition
         // the current duplicate, gapValue holds the element displaced by the first
         // swap of the cycle. hasGap is upstream's gap_opt.is_none().
         bool hasGap = false;
-        int gapPos = 0;
+        nint gapPos = 0;
         T gapValue = default!;
 
-        int left = 0;
-        int right = len;
+        // 64-bit cursors — the usize-based raw pointers of upstream (see the Lomuto
+        // path's nint note; the scan loops here pay the same x64 movsxd tax with
+        // int cursors).
+        nint left = 0;
+        nint right = len;
 
         while (true)
         {
@@ -238,7 +251,7 @@ internal static class IpnPartition
         if (hasGap)
             Unsafe.Add(ref vBase, gapPos) = gapValue;
 
-        return left; // left.offset_from_unsigned(v_base)
+        return (int)left; // left.offset_from_unsigned(v_base)
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
