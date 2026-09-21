@@ -85,20 +85,23 @@ internal static class DriftQuicksort
             bool performEqualPartition = leftAncestorPivot.Has
                 && !cmp.IsLess(in leftAncestorPivot.Value, in Unsafe.Add(ref vBase, pivotPos));
 
-            int leftPartitionLen = 0;
-            if (!performEqualPartition)
-            {
-                leftPartitionLen = StablePartition(v, scratch, pivotPos, pivotGoesLeft: false, invert: false, cmp);
-                performEqualPartition = leftPartitionLen == 0;
-            }
+int leftPartitionLen = 0;
+if (!performEqualPartition)
+{
+leftPartitionLen = StablePartition(v, scratch, pivotPos, pivotGoesLeft: false, cmp);
+performEqualPartition = leftPartitionLen == 0;
+}
 
-            if (performEqualPartition)
-            {
-                int midEq = StablePartition(v, scratch, pivotPos, pivotGoesLeft: true, invert: true, cmp);
-                v = v.Slice(midEq);
-                leftAncestorPivot = default;
-                continue;
-            }
+if (performEqualPartition)
+{
+// Upstream passes the reversed closure |a, b| !is_less(b, a) (quicksort.rs:69);
+// the port wraps the comparer in InvertedCmp<T, TC> — a separate JIT
+// monomorphization with the inversion folded in at compile time (Comparers.cs).
+int midEq = StablePartition(v, scratch, pivotPos, pivotGoesLeft: true, new InvertedCmp<T, TC>(cmp));
+v = v.Slice(midEq);
+leftAncestorPivot = default;
+continue;
+}
 
             // Process the left side on the next loop iteration, the right side by
             // recursion carrying the pivot as ancestor (quicksort.rs:75-78).
@@ -147,16 +150,17 @@ internal static class DriftQuicksort
         }
     }
 
-    /// <summary>stable_partition (quicksort.rs:88-181): partitions v around
-    /// p = v[pivotPos] and returns the number of elements comparing less than p. The
-    /// relative order of the &lt; p elements and of the &gt;= p elements is preserved — a
-    /// stable partition. scratch must supply at least v.Length elements. invert selects
-    /// upstream's reversed comparator `|a, b| !is_less(b, a)` (quicksort.rs:69 — the
-    /// equal-batch path): under it, elements &gt;= p compare "less" and go left.
-    /// pivotGoesLeft places the pivot element itself and stays independent of invert.</summary>
-    internal static int StablePartition<T, TC>(
-        Span<T> v, Span<T> scratch, int pivotPos, bool pivotGoesLeft, bool invert, TC cmp)
-        where TC : struct, IIsLess<T>
+/// <summary>stable_partition (quicksort.rs:88-181): partitions v around
+/// p = v[pivotPos] and returns the number of elements comparing less than p. The
+/// relative order of the &lt; p elements and of the &gt;= p elements is preserved — a
+/// stable partition. scratch must supply at least v.Length elements. The equal-batch
+/// path (quicksort.rs:69) passes an InvertedCmp&lt;T, TC&gt;-wrapped comparer — upstream's
+/// reversed comparator closure `|a, b| !is_less(b, a)`: under it, elements &gt;= p
+/// compare "less" and go left. pivotGoesLeft places the pivot element itself and
+/// stays independent of the inversion.</summary>
+internal static int StablePartition<T, TC>(
+Span<T> v, Span<T> scratch, int pivotPos, bool pivotGoesLeft, TC cmp)
+where TC : struct, IIsLess<T>
     {
         int len = v.Length;
         if (scratch.Length < len || pivotPos >= len)
@@ -188,15 +192,15 @@ internal static class DriftQuicksort
                 int unrollEnd = loopEndPos >= UnrollLen - 1 ? loopEndPos - (UnrollLen - 1) : 0;
                 while (state.Scan < unrollEnd)
                 {
-                    state.PartitionOne(LessThanPivot(in state.Current, in pivot, invert, cmp));
-                    state.PartitionOne(LessThanPivot(in state.Current, in pivot, invert, cmp));
-                    state.PartitionOne(LessThanPivot(in state.Current, in pivot, invert, cmp));
-                    state.PartitionOne(LessThanPivot(in state.Current, in pivot, invert, cmp));
+                    state.PartitionOne(cmp.IsLess(in state.Current, in pivot));
+                    state.PartitionOne(cmp.IsLess(in state.Current, in pivot));
+                    state.PartitionOne(cmp.IsLess(in state.Current, in pivot));
+                    state.PartitionOne(cmp.IsLess(in state.Current, in pivot));
                 }
             }
 
             while (state.Scan < loopEndPos)
-                state.PartitionOne(LessThanPivot(in state.Current, in pivot, invert, cmp));
+                state.PartitionOne(cmp.IsLess(in state.Current, in pivot));
 
             if (loopEndPos == len)
                 break;
@@ -222,15 +226,6 @@ internal static class DriftQuicksort
 
         return state.NumLeft;
     }
-
-    /// <summary>The partition comparison (quicksort.rs:131's is_less over the scan
-    /// element and the pivot, and its inverted closure |a, b| !is_less(b, a) at :69):
-    /// towards_left for the scanned element cur — !pivot &lt; cur under inversion, else
-    /// cur &lt; pivot.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool LessThanPivot<T, TC>(in T cur, in T pivot, bool invert, TC cmp)
-        where TC : struct, IIsLess<T>
-        => invert ? !cmp.IsLess(in pivot, in cur) : cmp.IsLess(in cur, in pivot);
 
     /// <summary>choose_pivot (pivot.rs:8-31): samples three size-(n/8) regions of v —
     /// [0, n/8), [4*n/8, 5*n/8), [7*n/8, n) — and returns a pseudo-median-of-3 index,

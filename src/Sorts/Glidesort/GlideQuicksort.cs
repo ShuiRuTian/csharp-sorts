@@ -102,7 +102,7 @@ internal static class GlideQuicksort
         state.AttachOutput(new TwoPieceSpan<T>(dest), new TwoPieceSpan<T>(scratch));
         // The seam's pivot is a pure value with no tracked element (-1 disables
         // tracking — the recursive driver passes the pivot element's index instead).
-        state.PartitionBidir(ref pivot, cmp, invert: false, pivotIdx: -1,
+        state.PartitionBidir(ref pivot, cmp, pivotIdx: -1,
             out _, out _);
     }
 
@@ -165,13 +165,23 @@ internal static class GlideQuicksort
         }
 
         // Partition around the pivot value, tracking the pivot element's landing spot
-        // (upstream's returned pivot_pos). invert = partitionLeft (rs:428-431).
+        // (upstream's returned pivot_pos). Inverted partition = partitionLeft
+        // (rs:428-431): the comparer is wrapped in InvertedCmp<T, TC> — a separate JIT
+        // monomorphization of the whole partition chain with the reversal folded in at
+        // compile time (Comparers.cs), the C# analog of upstream's
+        // cmp_from_closure(|a, b| !is_less(b, a)).
         T pivot = At(left, right, pivotIdx);
         var state = new BidirPartitionState<T>(
             new TwoPieceSpan<T>(left.A, left.B), new TwoPieceSpan<T>(right.A, right.B));
         state.AttachOutput(dest, scratch);
-        state.PartitionBidir(ref pivot, cmp, invert: partitionLeft, pivotIdx,
-            out bool pivotOutDest, out int pivotOutAbs);
+        bool pivotOutDest;
+        int pivotOutAbs;
+        if (partitionLeft)
+            state.PartitionBidir(ref pivot, new InvertedCmp<T, TC>(cmp), pivotIdx,
+                out pivotOutDest, out pivotOutAbs);
+        else
+            state.PartitionBidir(ref pivot, cmp, pivotIdx,
+                out pivotOutDest, out pivotOutAbs);
         state.Take(out TwoPieceSpan<T> lessInDest, out TwoPieceSpan<T> lessInScratch,
             out TwoPieceSpan<T> geqInScratch, out TwoPieceSpan<T> geqInDest);
 
@@ -524,10 +534,12 @@ internal ref struct BidirPartitionState<T>
     /// it; the port holds the pivot VALUE out-of-line and instead tracks the element's
     /// output position through every step (same net bookkeeping). When one scan
     /// exhausts, the other's remainder is split evenly into a new forward/backward
-    /// pair. invert selects the reversed comparator (upstream's
-    /// cmp_from_closure(|a, b| !is_less(b, a)), used when partition_left — the geq-side
-    /// recursion whose input may still contain equals of an ancestor pivot).</summary>
-    public void PartitionBidir<TC>(ref T pivot, TC cmp, bool invert, int pivotIdx,
+    /// pair. cmp is the driver's comparer — plain, or InvertedCmp&lt;T, TC&gt;-wrapped for
+    /// the reversed comparison (upstream's cmp_from_closure(|a, b| !is_less(b, a)),
+    /// used when partition_left — the geq-side recursion whose input may still
+    /// contain equals of an ancestor pivot); the inversion is a compile-time property
+    /// of the instantiation, not a runtime flag.</summary>
+    public void PartitionBidir<TC>(ref T pivot, TC cmp, int pivotIdx,
         out bool pivotOutDest, out int pivotOutAbs)
         where TC : struct, IIsLess<T>
     {
@@ -542,7 +554,7 @@ internal ref struct BidirPartitionState<T>
             // full remaining lengths.
             int backwardLimit = BackwardScan.Length;
             int limit = Math.Min(forwardLimit, backwardLimit);
-            PartitionBidirN(ref pivot, cmp, invert, limit);
+            PartitionBidirN(ref pivot, cmp, limit);
 
             if (ForwardScan.Length == 0 && BackwardScan.Length == 0)
             {
@@ -554,7 +566,7 @@ internal ref struct BidirPartitionState<T>
             {
                 // Handle odd input sizes.
                 if (BackwardScan.Length % 2 > 0)
-                    PartitionOneAny(ref pivot, cmp, invert, false);
+                    PartitionOneAny(ref pivot, cmp, false);
                 int half = BackwardScan.Length / 2;
                 BackwardScan.SplitOffBegin(half, out TwoPieceSpan<T> fwd);
                 ForwardScan = fwd;
@@ -563,7 +575,7 @@ internal ref struct BidirPartitionState<T>
             {
                 // Handle odd input sizes.
                 if (ForwardScan.Length % 2 > 0)
-                    PartitionOneAny(ref pivot, cmp, invert, true);
+                    PartitionOneAny(ref pivot, cmp, true);
                 int half = ForwardScan.Length / 2;
                 ForwardScan.SplitOffEnd(half, out TwoPieceSpan<T> bwd);
                 BackwardScan = bwd;
@@ -577,7 +589,7 @@ internal ref struct BidirPartitionState<T>
     /// four regions collapse to contiguous spans (always inside the driver recursion)
     /// the burst path below runs; only a genuinely disjoint layout — possible solely
     /// via the public Partition seam — keeps this per-element path.</summary>
-    private void PartitionBidirN<TC>(ref T pivot, TC cmp, bool invert, int n)
+    private void PartitionBidirN<TC>(ref T pivot, TC cmp, int n)
         where TC : struct, IIsLess<T>
     {
         if (ForwardScan.TryAsContiguousSpan(out Span<T> fSpan)
@@ -585,24 +597,24 @@ internal ref struct BidirPartitionState<T>
             && Dest.TryAsContiguousSpan(out Span<T> destSpan)
             && Scratch.TryAsContiguousSpan(out Span<T> scratchSpan))
         {
-            PartitionBidirNBurst(ref pivot, cmp, invert, n, fSpan, bSpan, destSpan, scratchSpan);
+            PartitionBidirNBurst(ref pivot, cmp, n, fSpan, bSpan, destSpan, scratchSpan);
             return;
         }
         for (int i = 0; i < n >> 2; i++)
         {
-            PartitionOneAny(ref pivot, cmp, invert, true);
-            PartitionOneAny(ref pivot, cmp, invert, false);
-            PartitionOneAny(ref pivot, cmp, invert, true);
-            PartitionOneAny(ref pivot, cmp, invert, false);
-            PartitionOneAny(ref pivot, cmp, invert, true);
-            PartitionOneAny(ref pivot, cmp, invert, false);
-            PartitionOneAny(ref pivot, cmp, invert, true);
-            PartitionOneAny(ref pivot, cmp, invert, false);
+            PartitionOneAny(ref pivot, cmp, true);
+            PartitionOneAny(ref pivot, cmp, false);
+            PartitionOneAny(ref pivot, cmp, true);
+            PartitionOneAny(ref pivot, cmp, false);
+            PartitionOneAny(ref pivot, cmp, true);
+            PartitionOneAny(ref pivot, cmp, false);
+            PartitionOneAny(ref pivot, cmp, true);
+            PartitionOneAny(ref pivot, cmp, false);
         }
         for (int i = 0; i < (n & 3); i++)
         {
-            PartitionOneAny(ref pivot, cmp, invert, true);
-            PartitionOneAny(ref pivot, cmp, invert, false);
+            PartitionOneAny(ref pivot, cmp, true);
+            PartitionOneAny(ref pivot, cmp, false);
         }
     }
 
@@ -610,12 +622,12 @@ internal ref struct BidirPartitionState<T>
     /// regions: base refs + int cursors, branchless conditional-ref stores and ternary
     /// counter arithmetic — the DriftQuicksort.PartitionState idiom applied to the
     /// bidirectional partition. Semantically identical to the per-element path: same
-    /// interleaving, comparison polarity (including invert), cursor updates and
-    /// pivot-element tracking; the region views are split once per batch instead of
-    /// per element. The strict F,B,F,B,... interleaving is preserved exactly — it is
-    /// load-bearing, keeping each direction's write fronts at or behind the other
-    /// direction's scan front in the aliased in-place layout.</summary>
-    private void PartitionBidirNBurst<TC>(ref T pivot, TC cmp, bool invert, int n,
+    /// interleaving, comparison polarity (via the possibly-InvertedCmp-wrapped
+    /// comparer), cursor updates and pivot-element tracking; the region views are
+    /// split once per batch instead of per element. The strict F,B,F,B,... interleaving
+    /// is preserved exactly — it is load-bearing, keeping each direction's write fronts
+    /// at or behind the other direction's scan front in the aliased in-place layout.</summary>
+    private void PartitionBidirNBurst<TC>(ref T pivot, TC cmp, int n,
         Span<T> fSpan, Span<T> bSpan, Span<T> destSpan, Span<T> scratchSpan)
         where TC : struct, IIsLess<T>
     {
@@ -653,19 +665,19 @@ internal ref struct BidirPartitionState<T>
 
         for (int i = 0; i < n >> 2; i++)
         {
-            BurstForward(ref pivot, cmp, invert, step++, pivotStep, ref fBase, ref destBase, ref scratchBase, ref f, ref destFwd, ref scratchFwd);
-            BurstBackward(ref pivot, cmp, invert, step++, pivotStep, ref bBase, ref destBase, ref scratchBase, bwdLen, ref b, ref destBwd, ref scratchBwd);
-            BurstForward(ref pivot, cmp, invert, step++, pivotStep, ref fBase, ref destBase, ref scratchBase, ref f, ref destFwd, ref scratchFwd);
-            BurstBackward(ref pivot, cmp, invert, step++, pivotStep, ref bBase, ref destBase, ref scratchBase, bwdLen, ref b, ref destBwd, ref scratchBwd);
-            BurstForward(ref pivot, cmp, invert, step++, pivotStep, ref fBase, ref destBase, ref scratchBase, ref f, ref destFwd, ref scratchFwd);
-            BurstBackward(ref pivot, cmp, invert, step++, pivotStep, ref bBase, ref destBase, ref scratchBase, bwdLen, ref b, ref destBwd, ref scratchBwd);
-            BurstForward(ref pivot, cmp, invert, step++, pivotStep, ref fBase, ref destBase, ref scratchBase, ref f, ref destFwd, ref scratchFwd);
-            BurstBackward(ref pivot, cmp, invert, step++, pivotStep, ref bBase, ref destBase, ref scratchBase, bwdLen, ref b, ref destBwd, ref scratchBwd);
+            BurstForward(ref pivot, cmp, step++, pivotStep, ref fBase, ref destBase, ref scratchBase, ref f, ref destFwd, ref scratchFwd);
+            BurstBackward(ref pivot, cmp, step++, pivotStep, ref bBase, ref destBase, ref scratchBase, bwdLen, ref b, ref destBwd, ref scratchBwd);
+            BurstForward(ref pivot, cmp, step++, pivotStep, ref fBase, ref destBase, ref scratchBase, ref f, ref destFwd, ref scratchFwd);
+            BurstBackward(ref pivot, cmp, step++, pivotStep, ref bBase, ref destBase, ref scratchBase, bwdLen, ref b, ref destBwd, ref scratchBwd);
+            BurstForward(ref pivot, cmp, step++, pivotStep, ref fBase, ref destBase, ref scratchBase, ref f, ref destFwd, ref scratchFwd);
+            BurstBackward(ref pivot, cmp, step++, pivotStep, ref bBase, ref destBase, ref scratchBase, bwdLen, ref b, ref destBwd, ref scratchBwd);
+            BurstForward(ref pivot, cmp, step++, pivotStep, ref fBase, ref destBase, ref scratchBase, ref f, ref destFwd, ref scratchFwd);
+            BurstBackward(ref pivot, cmp, step++, pivotStep, ref bBase, ref destBase, ref scratchBase, bwdLen, ref b, ref destBwd, ref scratchBwd);
         }
         for (int i = 0; i < (n & 3); i++)
         {
-            BurstForward(ref pivot, cmp, invert, step++, pivotStep, ref fBase, ref destBase, ref scratchBase, ref f, ref destFwd, ref scratchFwd);
-            BurstBackward(ref pivot, cmp, invert, step++, pivotStep, ref bBase, ref destBase, ref scratchBase, bwdLen, ref b, ref destBwd, ref scratchBwd);
+            BurstForward(ref pivot, cmp, step++, pivotStep, ref fBase, ref destBase, ref scratchBase, ref f, ref destFwd, ref scratchFwd);
+            BurstBackward(ref pivot, cmp, step++, pivotStep, ref bBase, ref destBase, ref scratchBase, bwdLen, ref b, ref destBwd, ref scratchBwd);
         }
 
         // Restore the region cursors and shrink the views once per batch.
@@ -688,12 +700,14 @@ internal ref struct BidirPartitionState<T>
     /// algorithm and its 2n &lt;= L bound are the same). Records the pivot element's
     /// landing spot when this step is the one consuming it (step == pivotStep).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void BurstForward<TC>(ref T pivot, TC cmp, bool invert, int step, int pivotStep,
+    private void BurstForward<TC>(ref T pivot, TC cmp, int step, int pivotStep,
         ref T fBase, ref T destBase, ref T scratchBase, ref int f, ref int destFwd, ref int scratchFwd)
         where TC : struct, IIsLess<T>
     {
         ref T scan = ref Unsafe.Add(ref fBase, f);
-        bool towardsLeft = invert ? !cmp.IsLess(in pivot, in scan) : cmp.IsLess(in scan, in pivot);
+        // cmp is plain or InvertedCmp-wrapped — towardsLeft is "compares less" under
+        // whichever polarity the driver chose, folded in at JIT time.
+        bool towardsLeft = cmp.IsLess(in scan, in pivot);
         int destOff = destFwd;
         int scratchOff = scratchFwd;
         if (Unsafe.SizeOf<T>() <= IntPtr.Size)
@@ -727,12 +741,13 @@ internal ref struct BidirPartitionState<T>
     /// stable_quicksort.rs:189-219): the less side goes to scratch's backward head and
     /// the geq side to dest's backward head — the mirror of BurstForward.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void BurstBackward<TC>(ref T pivot, TC cmp, bool invert, int step, int pivotStep,
+    private void BurstBackward<TC>(ref T pivot, TC cmp, int step, int pivotStep,
         ref T bBase, ref T destBase, ref T scratchBase, int bwdLen, ref int b, ref int destBwd, ref int scratchBwd)
         where TC : struct, IIsLess<T>
     {
         ref T scan = ref Unsafe.Add(ref bBase, bwdLen - 1 - b);
-        bool towardsLeft = invert ? !cmp.IsLess(in pivot, in scan) : cmp.IsLess(in scan, in pivot);
+        // See BurstForward: polarity lives in the (possibly wrapped) comparer.
+        bool towardsLeft = cmp.IsLess(in scan, in pivot);
         int destOff = destBwd - 1;
         int scratchOff = scratchBwd - 1;
         if (Unsafe.SizeOf<T>() <= IntPtr.Size)
@@ -760,14 +775,16 @@ internal ref struct BidirPartitionState<T>
         b++;
     }
 
-    /// <summary>One forward or backward step with the (possibly inverted) comparison,
-    /// plus pivot-element tracking. Inversion is upstream's
-    /// cmp_from_closure(|a, b| !is_less(b, a)) — used when partitioning on the LEFT
-    /// (stable_quicksort.rs:428-431 inverts exactly when partition_left): the
-    /// condition-true bucket then holds elements &lt;= pivot (equals included), which
-    /// is what makes the equal-batch skip sound.</summary>
+    /// <summary>One forward or backward step, plus pivot-element tracking. The
+    /// comparison polarity lives in cmp — plain or InvertedCmp&lt;T, TC&gt;-wrapped
+    /// (upstream's cmp_from_closure(|a, b| !is_less(b, a)), applied exactly when
+    /// partitioning on the LEFT, stable_quicksort.rs:428-431): the condition-true
+    /// bucket then holds elements &lt;= pivot (equals included), which is what makes
+    /// the equal-batch skip sound. The dedicated Inverted step variants the earlier
+    /// port carried are gone — a wrapped comparer over PartitionOneForward/Backward
+    /// is exactly equivalent and monomorphized for free.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void PartitionOneAny<TC>(ref T pivot, TC cmp, bool invert, bool forward)
+    private void PartitionOneAny<TC>(ref T pivot, TC cmp, bool forward)
         where TC : struct, IIsLess<T>
     {
         // Pre-step length: the backward step consumes logical index len-1 of the
@@ -775,17 +792,10 @@ internal ref struct BidirPartitionState<T>
         int len = ForwardScan.Length + BackwardScan.Length;
         bool toDest;
         int outIdx;
-        if (!invert)
-        {
-            if (forward)
-                PartitionOneForward(ref pivot, cmp, out toDest, out outIdx);
-            else
-                PartitionOneBackward(ref pivot, cmp, out toDest, out outIdx);
-        }
-        else if (forward)
-            PartitionOneForwardInverted(ref pivot, cmp, out toDest, out outIdx);
+        if (forward)
+            PartitionOneForward(ref pivot, cmp, out toDest, out outIdx);
         else
-            PartitionOneBackwardInverted(ref pivot, cmp, out toDest, out outIdx);
+            PartitionOneBackward(ref pivot, cmp, out toDest, out outIdx);
 
         // Track the pivot element (upstream's returned pivot_pos write-back).
         if (_pivotRel >= 0)
@@ -810,58 +820,6 @@ internal ref struct BidirPartitionState<T>
         }
     }
 
-    /// <summary>Forward step under the inverted comparator: the write that normally
-    /// goes to dest's forward head goes to scratch's forward head and vice versa.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void PartitionOneForwardInverted<TC>(ref T pivot, TC cmp, out bool toDest, out int outIdx)
-        where TC : struct, IIsLess<T>
-    {
-        ref T scan = ref ForwardScan[0];
-        bool invertedLess = !cmp.IsLess(in pivot, in scan);
-        int destOut = _numAtDestBegin;
-        int scratchOut = _scratchFwdIdx - _numAtDestBegin;
-        if (invertedLess)
-        {
-            Dest[destOut] = scan;
-            toDest = true;
-            outIdx = destOut;
-        }
-        else
-        {
-            Scratch[scratchOut] = scan;
-            toDest = false;
-            outIdx = scratchOut;
-        }
-        if (invertedLess) _numAtDestBegin++;
-        _scratchFwdIdx++;
-        ForwardScan.SplitOffBegin(1, out _);
-    }
-
-    /// <summary>Backward step under the inverted comparator.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void PartitionOneBackwardInverted<TC>(ref T pivot, TC cmp, out bool toDest, out int outIdx)
-        where TC : struct, IIsLess<T>
-    {
-        ref T scan = ref BackwardScan[BackwardScan.Length - 1];
-        bool invertedLess = !cmp.IsLess(in pivot, in scan);
-        int destOut = _destBwdIdx + _numAtScratchEnd - 1;
-        int scratchOut = Scratch.Length - _numAtScratchEnd - 1;
-        if (invertedLess)
-        {
-            Scratch[scratchOut] = scan;
-            toDest = false;
-            outIdx = scratchOut;
-        }
-        else
-        {
-            Dest[destOut] = scan;
-            toDest = true;
-            outIdx = destOut;
-        }
-        if (invertedLess) _numAtScratchEnd++;
-        _destBwdIdx--;
-        BackwardScan.SplitOffEnd(1, out _);
-    }
 }
 
 /// <summary>A logical slice that may physically consist of two pieces (MutSlice's

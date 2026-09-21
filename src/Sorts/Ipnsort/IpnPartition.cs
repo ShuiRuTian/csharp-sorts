@@ -15,6 +15,22 @@
 // All other dataflow is 1:1: raw pointers become a base ref + int indices,
 // ptr::copy / copy_nonoverlapping become read-then-write element moves, and
 // ManuallyDrop becomes plain locals.
+//
+// C#-idiom divergences (JitDisasm-verified, ARM64 + x64):
+//  1. Upstream passes the inverted comparison as a DIFFERENT closure type
+//     (`&mut |a, b| !is_less(b, a)`, quicksort.rs:45) — a separate
+//     monomorphization with the inversion folded in. The port threads no runtime
+//     `invert: bool` through the loops; the driver wraps the comparer in
+//     InvertedCmp<T, TC> (Comparers.cs), reproducing the monomorphization.
+//  2. The pivot is a by-VALUE local snapshot, like the driftsort port's
+//     (DriftQuicksort class header): upstream relies on &mut noalias to keep the
+//     pivot in a register; RyuJIT has no such guarantee for a byref into the same
+//     array being written, so `in T pivot` reloaded it from memory every
+//     comparison. The snapshot cannot diverge: the impls write only v[1..] and the
+//     comparer receives `in T` (no mutation), so all comparisons see the same
+//     value upstream would have.
+//  3. LoopBody's rightVal is passed by value: an `in` byref forced a second load
+//     of the same element for the store half of the cyclic move.
 using System;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -31,12 +47,12 @@ internal static class IpnPartition
     /// → branchless Lomuto, else branchy Hoare), then swap the pivot to index num_lt.
     /// On return v[0..num_lt) are &lt; pivot, v[num_lt] is the pivot and
     /// v[num_lt+1..] are &gt;= pivot; num_lt is the count of elements &lt; pivot.
-    /// invert (the driver's ancestor-equal call, quicksort.rs:45) replaces every
-    /// is_less(cur, pivot) with the inverted closure |a, b| !is_less(b, a):
-    /// "less" becomes !pivot &lt; cur, so num_lt counts elements &lt;= pivot and
+    /// For the ancestor-equal path the driver passes an InvertedCmp&lt;T, TC&gt; —
+    /// upstream's `|a, b| !is_less(b, a)` closure (quicksort.rs:45): "less"
+    /// becomes !pivot &lt; cur, so num_lt counts elements &lt;= pivot and
     /// v[num_lt+1..] are &gt; pivot (equals land in v[0..num_lt]). Same shape as
-    /// DriftQuicksort.StablePartition's invert.</summary>
-    internal static int Partition<T, TC>(Span<T> v, int pivotPos, TC cmp, bool invert = false)
+    /// DriftQuicksort.StablePartition's inverted call.</summary>
+    internal static int Partition<T, TC>(Span<T> v, int pivotPos, TC cmp)
         where TC : struct, IIsLess<T>
     {
         int len = v.Length;
@@ -49,15 +65,16 @@ internal static class IpnPartition
 
         // Place the pivot at the beginning of the slice (quicksort.rs:130).
         Swap(ref v[0], ref v[pivotPos]);
-        // pivot aliases v[0]; both impls only ever write v[1..] (their index 0 is
-        // v[1] of the full span), so the pivot slot is never clobbered.
-        ref T pivot = ref v[0];
+        // By-value pivot snapshot (see the class header, divergence 2): every
+        // comparison in the impls uses this copy; the array slot v[0] is never
+        // read again until the final swap below.
+        T pivot = v[0];
         Span<T> vWithoutPivot = v.Slice(1);
 
         // Unsafe.SizeOf is a JIT constant — the branch is folded at compile time.
         int numLt = Unsafe.SizeOf<T>() <= MaxBranchlessPartitionSize
-            ? PartitionLomutoBranchlessCyclic<T, TC>(vWithoutPivot, in pivot, invert, cmp)
-            : PartitionHoareBranchyCyclic<T, TC>(vWithoutPivot, in pivot, invert, cmp);
+            ? PartitionLomutoBranchlessCyclic<T, TC>(vWithoutPivot, pivot, cmp)
+            : PartitionHoareBranchyCyclic<T, TC>(vWithoutPivot, pivot, cmp);
 
         // Place the pivot between the two partitions (quicksort.rs:145).
         Swap(ref v[0], ref v[numLt]);
@@ -67,7 +84,7 @@ internal static class IpnPartition
     /// <summary>partition_lomuto_branchless_cyclic (quicksort.rs:254-353). Novel
     /// partition by Lukas Bergdoll and Orson Peters: branchless Lomuto partition
     /// paired with a cyclic permutation.</summary>
-    private static int PartitionLomutoBranchlessCyclic<T, TC>(Span<T> v, in T pivot, bool invert, TC cmp)
+    private static int PartitionLomutoBranchlessCyclic<T, TC>(Span<T> v, T pivot, TC cmp)
         where TC : struct, IIsLess<T>
     {
         int len = v.Length;
@@ -93,17 +110,17 @@ internal static class IpnPartition
         {
             while (right < unrollEnd)
             {
-                LoopBody(ref vBase, in pivot, invert, cmp, ref gapPos, ref numLt, ref right,
-                    in Unsafe.Add(ref vBase, right));
-                LoopBody(ref vBase, in pivot, invert, cmp, ref gapPos, ref numLt, ref right,
-                    in Unsafe.Add(ref vBase, right));
+                LoopBody(ref vBase, pivot, cmp, ref gapPos, ref numLt, ref right,
+                    Unsafe.Add(ref vBase, right));
+                LoopBody(ref vBase, pivot, cmp, ref gapPos, ref numLt, ref right,
+                    Unsafe.Add(ref vBase, right));
             }
         }
         else
         {
             while (right < unrollEnd)
-                LoopBody(ref vBase, in pivot, invert, cmp, ref gapPos, ref numLt, ref right,
-                    in Unsafe.Add(ref vBase, right));
+                LoopBody(ref vBase, pivot, cmp, ref gapPos, ref numLt, ref right,
+                    Unsafe.Add(ref vBase, right));
         }
 
         // Cleanup (quicksort.rs:334-349): one shared loop for the unroll remainder
@@ -115,13 +132,12 @@ internal static class IpnPartition
         {
             if (right == end)
             {
-                LoopBody(ref vBase, in pivot, invert, cmp, ref gapPos, ref numLt, ref right,
-                    in gapValue);
+                LoopBody(ref vBase, pivot, cmp, ref gapPos, ref numLt, ref right, gapValue);
                 break;
             }
 
-            LoopBody(ref vBase, in pivot, invert, cmp, ref gapPos, ref numLt, ref right,
-                in Unsafe.Add(ref vBase, right));
+            LoopBody(ref vBase, pivot, cmp, ref gapPos, ref numLt, ref right,
+                Unsafe.Add(ref vBase, right));
         }
 
         return numLt;
@@ -131,14 +147,15 @@ internal static class IpnPartition
     /// inspection — normally v[right]; in the final cleanup call it is the saved gap
     /// value. One instantiation is shared by the unrolled main loop and both cleanup
     /// cases, as upstream does to save binary size and compile-time
-    /// (quicksort.rs:332-333).</summary>
+    /// (quicksort.rs:332-333). pivot and rightVal are by-value: inlined they are
+    /// plain locals, keeping the pivot in a register and loading rightVal once
+    /// (see the class header, divergences 2 and 3).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void LoopBody<T, TC>(
-        ref T vBase, in T pivot, bool invert, TC cmp, ref int gapPos, ref int numLt, ref int right,
-        in T rightVal)
+        ref T vBase, T pivot, TC cmp, ref int gapPos, ref int numLt, ref int right, T rightVal)
         where TC : struct, IIsLess<T>
     {
-        bool rightIsLt = LessThanPivot(in rightVal, in pivot, invert, cmp);
+        bool rightIsLt = cmp.IsLess(in rightVal, in pivot);
         int left = numLt;
 
         // ptr::copy(left, gap.pos, 1) — read-then-write, memmove for one element.
@@ -152,19 +169,10 @@ internal static class IpnPartition
         right++;
     }
 
-    /// <summary>The partition comparison (quicksort.rs:107's is_less over the scan
-    /// element and the pivot, and the driver's inverted closure
-    /// |a, b| !is_less(b, a) at quicksort.rs:45): !pivot &lt; cur under inversion,
-    /// else cur &lt; pivot. Same shape as DriftQuicksort.LessThanPivot.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool LessThanPivot<T, TC>(in T cur, in T pivot, bool invert, TC cmp)
-        where TC : struct, IIsLess<T>
-        => invert ? !cmp.IsLess(in pivot, in cur) : cmp.IsLess(in cur, in pivot);
-
     /// <summary>partition_hoare_branchy_cyclic (quicksort.rs:162-242): optimized for
     /// large types that are expensive to move and small code-gen; swaps each pair of
     /// out-of-order elements through a single-element gap (cyclic permutation).</summary>
-    private static int PartitionHoareBranchyCyclic<T, TC>(Span<T> v, in T pivot, bool invert, TC cmp)
+    private static int PartitionHoareBranchyCyclic<T, TC>(Span<T> v, T pivot, TC cmp)
         where TC : struct, IIsLess<T>
     {
         int len = v.Length;
@@ -186,14 +194,16 @@ internal static class IpnPartition
         while (true)
         {
             // Find the first element greater than the pivot (quicksort.rs:198-200).
-            while (left < right && LessThanPivot(in Unsafe.Add(ref vBase, left), in pivot, invert, cmp))
+            // cmp is the driver's comparer — plain or InvertedCmp-wrapped, the
+            // upstream closure in either case (quicksort.rs:190/205's is_less calls).
+            while (left < right && cmp.IsLess(in Unsafe.Add(ref vBase, left), in pivot))
                 left++;
 
             // Find the last element equal to the pivot (quicksort.rs:203-208).
             while (true)
             {
                 right--;
-                if (left >= right || LessThanPivot(in Unsafe.Add(ref vBase, right), in pivot, invert, cmp))
+                if (left >= right || cmp.IsLess(in Unsafe.Add(ref vBase, right), in pivot))
                     break;
             }
 

@@ -23,12 +23,20 @@ namespace BaseCases;
 //     dotnet bin/Release/net10.0/basecases.dll good01
 //
 // 本文件复现验证结果（Apple M3 Pro, .NET 10.0.5）
-//   Arm64: Good01_SwapIfLess  csel=3  cset=2  cbz=0    <- 无分支（GOOD）
-//          Good01_SelectIndex csel=0  cset=2  cbz=0    <- 纯算术无分支（GOOD）
+//   Arm64: Good01_SwapIfLess[int]        csel=3  cset=2  cbz=0    <- 无分支（GOOD）
+//          Good01_SelectIndex[int]        csel=0  cset=2  cbz=0    <- 纯算术无分支（GOOD）
+//          Good01_SwapIfLess[__Canon]     csel=2  cset=1  cbz=1    <- 引用类型实例化
+//             （string 等，共享泛型代码）：选择同样是 csel —— 选 GC 引用就是
+//             8 字节指针选择，物理限制天然不成立；那个 cbz 是 CompareTo 接口
+//             分发前的 null 检查，与选择无关。引用类型下元素拷贝永远是
+//             8 字节指针，SizeOf<T> = 8 <= 16，永远走小 T 路径 —— 库中
+//             尺寸分档对引用类型无影响，值三元即最优。
+//             真正的开销在比较器（接口虚调用 blr）与 GC 写屏障（引用型
+//             数组存储经 helper call），远大于选择指令本身。
 //   x64（Rosetta 2）:
-//          Good01_SwapIfLess  cmov=3  setcc=2  jcc=2   <- 两个 jae 均为边界
+//          Good01_SwapIfLess[int]        cmov=3  setcc=2  jcc=2   <- 两个 jae 均为边界
 //             检查，选择全部 cmov，数据依赖分支 0（GOOD，与 Arm64 对称）
-//          Good01_SelectIndex cmov=0  setcc=2  jcc=3   <- 其中 2 个为边界检查，
+//          Good01_SelectIndex[int]       cmov=0  setcc=2  jcc=3   <- 其中 2 个为边界检查，
 //             另 1 个是数据依赖 jge：CompareTo 结果在 x64 上经分支材料化
 //             （jge IG06 / mov edi,-1 两路汇合），而 Arm64 同形为 cset 纯算术。
 //             这是本 GOOD 基准中唯一的跨架构分歧，值得顺带提给 JIT 团队。
@@ -72,6 +80,16 @@ internal static class Good01ValueTernary
                 acc += SelectIndex(b, i, i + 1);
             }
         }
+
+        // 引用类型实例化（共享泛型 __Canon）：验证值三元选 GC 引用同样 csel
+        var s = new string[64];
+        var srnd = new Random(97);
+        for (int i = 0; i < s.Length; i++)
+            s[i] = srnd.Next().ToString("x8");
+        for (int k = 0; k + 1 < s.Length; k += 2)
+            SwapIfLess(s, k, k + 1);
+        acc += s[0].GetHashCode();
+
         Console.WriteLine($"good01 acc={acc}");
     }
 }

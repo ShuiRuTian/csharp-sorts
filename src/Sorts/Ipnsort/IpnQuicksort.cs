@@ -49,13 +49,16 @@ internal static class IpnQuicksort
             // If the chosen pivot is equal to the predecessor, then it's the smallest
             // element in the slice. Partition the slice into elements equal to and
             // elements greater than the pivot — usually hit when the slice contains
-            // many duplicate elements (quicksort.rs:43-57). The inverted comparator
-            // makes Partition's "num_lt" count elements <= pivot, so v[num_lt] is the
+            // many duplicate elements (quicksort.rs:43-57). Upstream passes the
+            // reversed closure |a, b| !is_less(b, a); the port wraps the comparer in
+            // InvertedCmp<T, TC> — a separate JIT monomorphization, so the inversion
+            // is free per element (see Comparers.cs). The inverted comparer makes
+            // Partition's "num_lt" count elements <= pivot, so v[num_lt] is the
             // pivot with every equal element before it: skip past all of them and
             // drop the ancestor (nothing in the remainder can equal it).
             if (ancestorPivot.Has && !cmp.IsLess(in ancestorPivot.Value, in v[pivotPos]))
             {
-                numLt = IpnPartition.Partition(v, pivotPos, cmp, invert: true);
+                numLt = IpnPartition.Partition(v, pivotPos, new InvertedCmp<T, TC>(cmp));
                 v = v.Slice(numLt + 1);
                 ancestorPivot = default;
                 continue;
@@ -63,7 +66,7 @@ internal static class IpnQuicksort
 
             // Partition the slice (quicksort.rs:59). num_lt is in-bounds and v[num_lt]
             // holds the pivot (upstream intrinsics::assume(num_lt < v.len())).
-            numLt = IpnPartition.Partition(v, pivotPos, cmp, invert: false);
+            numLt = IpnPartition.Partition(v, pivotPos, cmp);
 
             // Recurse into the left side; a fixed recursion limit is fine, testing
             // shows no real benefit for recursing into the shorter side

@@ -103,7 +103,7 @@ public class DriftQuicksortTests
         var v = new int[] { 5, 1, 9, 3, 5, 8, 0, 2, 5 };
         var scratch = new int[v.Length];
         int numLeft = DriftQuicksort.StablePartition<int, ComparableCmp<int>>(
-            v, scratch, 0, pivotGoesLeft: false, invert: false, new());
+            v, scratch, 0, pivotGoesLeft: false, new());
         // Elements < 5: 1,3,0,2 (input order) at the front; >= 5 at the back in
         // input order (5,9,5,8,5).
         Assert.Equal(4, numLeft);
@@ -113,14 +113,15 @@ public class DriftQuicksortTests
     [Fact]
     public void StablePartitionWithInvertedComparatorBatchesEquals()
     {
-        // The equal-partition call shape (quicksort.rs:69): invert + pivotGoesLeft.
-        // Inverted closure g(a, b) = !is_less(b, a): towards_left = g(scan, pivot)
+        // The equal-partition call shape (quicksort.rs:69): the driver wraps the
+        // comparer in InvertedCmp (upstream's inverted closure
+        // g(a, b) = !is_less(b, a)) + pivotGoesLeft: towards_left = g(scan, pivot)
         // = !is_less(pivot, scan), i.e. scan <= pivot goes LEFT. Pivot itself goes
-        // left (independent of invert).
+        // left (independent of the inversion).
         var v = new int[] { 5, 1, 9, 3, 5, 8, 0, 2, 5 };
         var scratch = new int[v.Length];
-        int numLeft = DriftQuicksort.StablePartition<int, ComparableCmp<int>>(
-            v, scratch, 0, pivotGoesLeft: true, invert: true, new());
+        int numLeft = DriftQuicksort.StablePartition<int, InvertedCmp<int, ComparableCmp<int>>>(
+            v, scratch, 0, pivotGoesLeft: true, new(new()));
         // towards_left = !(pivot < cur) = cur <= pivot: everything <= 5 goes LEFT
         // (1,3,5,0,2,5), the pivot itself (pivotPos=0 is scanned first, goes left
         // via pivotGoesLeft), and 9,8 go right. num_left = 7, both sides in input order.
