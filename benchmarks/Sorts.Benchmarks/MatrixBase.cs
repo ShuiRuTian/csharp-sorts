@@ -54,8 +54,10 @@ public abstract class SortMatrixBase<T> where T : IComparable<T>
     public void Ipnsort() => Sorts.Ipnsort.Sort(_ring.Next());
 }
 
-/// <summary>Core matrix: all 12 distributions × 3 sizes × 5 implementations — the main
-/// adaptivity/robustness grid (36 parameter cases, 180 benchmark cases).</summary>
+/// <summary>Core matrix: all 12 distributions × 2 sizes × 5 implementations — the main
+/// adaptivity/robustness grid (24 parameter cases, 120 benchmark cases). The 1M
+/// point was cut: 4MB working sets exceed realistic sort payloads and dominated
+/// the run; the scaling curve lives in ScalingBench.</summary>
 [Config(typeof(BenchConfig))]
 [InvocationCount(Ring.Size)]
 public class CoreMatrixBench : SortMatrixBase<int>
@@ -71,7 +73,7 @@ public class CoreMatrixBench : SortMatrixBase<int>
         Distribution.AllEqual, Distribution.FewUnique, Distribution.RandomTail)]
     public Distribution Dist { get; set; }
 
-    [Params(1_000, 100_000, 1_000_000)]
+    [Params(1_000, 100_000)]
     public int N { get; set; }
 
     [GlobalSetup]
