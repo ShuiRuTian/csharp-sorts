@@ -9,38 +9,26 @@ public class ApiContractTests
     // each guard theory body stays one line per behavior.
     private static readonly Dictionary<string, Action<int[]>> SortAll = new()
     {
-        ["QuadSort"] = static a => Sorts.QuadSort.Sort(a),
-        ["GlideSort"] = static a => Sorts.GlideSort.Sort(a),
-        ["DriftSort"] = static a => Sorts.DriftSort.Sort(a),
         ["Ipnsort"] = static a => Sorts.Ipnsort.Sort(a),
     };
 
     private static readonly Dictionary<string, Action<int[], int, int>> SortRange = new()
     {
-        ["QuadSort"] = static (a, i, l) => Sorts.QuadSort.Sort(a, i, l),
-        ["GlideSort"] = static (a, i, l) => Sorts.GlideSort.Sort(a, i, l),
-        ["DriftSort"] = static (a, i, l) => Sorts.DriftSort.Sort(a, i, l),
         ["Ipnsort"] = static (a, i, l) => Sorts.Ipnsort.Sort(a, i, l),
     };
 
     private static readonly Dictionary<string, Action<int[]>> SortWithNullComparer = new()
     {
-        ["QuadSort"] = static a => Sorts.QuadSort.Sort(a, (IComparer<int>?)null),
-        ["GlideSort"] = static a => Sorts.GlideSort.Sort(a, (IComparer<int>?)null),
-        ["DriftSort"] = static a => Sorts.DriftSort.Sort(a, (IComparer<int>?)null),
         ["Ipnsort"] = static a => Sorts.Ipnsort.Sort(a, (IComparer<int>?)null),
     };
 
     private static readonly Dictionary<string, Action<int[]>> SortWithComparison = new()
     {
-        ["QuadSort"] = static a => Sorts.QuadSort.Sort(a, static (int x, int y) => x.CompareTo(y)),
-        ["GlideSort"] = static a => Sorts.GlideSort.Sort(a, static (int x, int y) => x.CompareTo(y)),
-        ["DriftSort"] = static a => Sorts.DriftSort.Sort(a, static (int x, int y) => x.CompareTo(y)),
         ["Ipnsort"] = static a => Sorts.Ipnsort.Sort(a, static (int x, int y) => x.CompareTo(y)),
     };
 
-    public static IEnumerable<object[]> AllSorts() // reflect over the 4 classes
-        => new object[][] { new[] { "QuadSort" }, new[] { "GlideSort" }, new[] { "DriftSort" }, new[] { "Ipnsort" } };
+    public static IEnumerable<object[]> AllSorts()
+        => new object[][] { new[] { "Ipnsort" } };
 
     [Theory]
     [MemberData(nameof(AllSorts))]
@@ -80,10 +68,9 @@ public class ApiContractTests
     [Fact]
     public void IComparerNullMeansDefault()
     {
-        // Sort(int[], (IComparer<int>?)null) sorts ascending — needs a working kernel;
-        // kept intentionally RED (NotImplementedException) until the first algorithm task lands.
+        // Sort(int[], (IComparer<int>?)null) sorts ascending — needs a working kernel.
         var array = new[] { 3, 1, 2 };
-        Sorts.QuadSort.Sort(array, (IComparer<int>?)null);
+        Sorts.Ipnsort.Sort(array, (IComparer<int>?)null);
         Assert.Equal(new[] { 1, 2, 3 }, array);
     }
 }

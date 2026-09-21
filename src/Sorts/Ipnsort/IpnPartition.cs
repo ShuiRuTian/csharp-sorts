@@ -22,8 +22,8 @@
 //     monomorphization with the inversion folded in. The port threads no runtime
 //     `invert: bool` through the loops; the driver wraps the comparer in
 //     InvertedCmp<T, TC> (Comparers.cs), reproducing the monomorphization.
-//  2. The pivot is a by-VALUE local snapshot, like the driftsort port's
-//     (DriftQuicksort class header): upstream relies on &mut noalias to keep the
+//  2. The pivot is a by-VALUE local snapshot, like the shared pivot port's
+//     (IpnPivot.cs): upstream relies on &mut noalias to keep the
 //     pivot in a register; RyuJIT has no such guarantee for a byref into the same
 //     array being written, so `in T pivot` reloaded it from memory every
 //     comparison. The snapshot cannot diverge: the impls write only v[1..] and the
@@ -51,7 +51,7 @@ internal static class IpnPartition
     /// upstream's `|a, b| !is_less(b, a)` closure (quicksort.rs:45): "less"
     /// becomes !pivot &lt; cur, so num_lt counts elements &lt;= pivot and
     /// v[num_lt+1..] are &gt; pivot (equals land in v[0..num_lt]). Same shape as
-    /// DriftQuicksort.StablePartition's inverted call.</summary>
+    /// the inverted partition calls elsewhere in this port.</summary>
     internal static int Partition<T, TC>(Span<T> v, int pivotPos, TC cmp)
         where TC : struct, IIsLess<T>
     {

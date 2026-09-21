@@ -1,11 +1,10 @@
 // Ported from https://github.com/Voultapher/sort-research-rs (ipnsort src/quicksort.rs:10-76),
 // MIT OR Apache-2.0, by Lukas Bergoll. C# port 2026 — the quicksort driver.
 //
-// Reuse decisions (cross-refs): choose_pivot is DriftQuicksort.ChoosePivot (ipnsort's
-// pivot.rs is byte-for-byte the glidesort algorithm driftsort also uses; the port is
-// verified, PseudoMedianRecThreshold = 64 on both sides). The ancestor pivot is
-// DriftQuicksort's PivotRef<T> (by-value optional element) — see its doc comment for
-// why a copy rather than a ref.
+// Reuse decisions (cross-refs): choose_pivot is IpnPivot.ChoosePivot (pivot.rs, shared
+// with the small-sort primitives port — see SmallSortPrimitives.cs). The ancestor pivot
+// is PivotRef<T> (by-value optional element) — see its doc comment for why a copy
+// rather than a ref.
 using System;
 using System.Runtime.CompilerServices;
 
@@ -43,7 +42,7 @@ internal static class IpnQuicksort
             limit--;
 
             // Choose a pivot (quicksort.rs:40).
-            int pivotPos = DriftQuicksort.ChoosePivot(v, cmp);
+            int pivotPos = IpnPivot.ChoosePivot(v, cmp);
             int numLt;
 
             // If the chosen pivot is equal to the predecessor, then it's the smallest

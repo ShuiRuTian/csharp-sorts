@@ -7,7 +7,7 @@ namespace Sorts.Benchmarks;
 /// <summary>Type matrix: five element types × four key distributions × N=100_000 — how
 /// each sort behaves as element copy cost grows from 4-byte int to 128-byte struct.
 /// One nested class per type (generic benchmarks do not bind well as direct params);
-/// each inherits the five implementation methods from SortMatrixBase.</summary>
+/// each inherits the two implementation methods from SortMatrixBase.</summary>
 public class TypeMatrixBench
 {
     /// <summary>int[] — the 4-byte baseline element.</summary>

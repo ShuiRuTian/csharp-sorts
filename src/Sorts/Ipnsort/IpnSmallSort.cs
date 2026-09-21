@@ -5,13 +5,13 @@
 //
 // The shared primitives upstream ships identically in driftsort's smallsort.rs —
 // insertion_sort_shift_left, insert_tail, sort4_stable, sort8_stable, bidirectional_merge
-// (merge_up/merge_down included) — were diffed against this file and are REUSED from the
-// verified DriftSmallSort port rather than copied; only the ipnsort-specific layers live
-// here. Rust's MaybeUninit stack arrays become stackalloc over a byte buffer for
-// unmanaged T (smallsort.rs:114-123, 241) and an ArrayPool rental for reference types —
-// upstream stack-allocates either way, C# cannot stackalloc unconstrained T; the repo's
-// GlideSmallSort established this two-branch pattern. CopyOnDrop / ManuallyDrop panic
-// machinery has no port: an exception from the comparator leaves an unspecified state.
+// (merge_up/merge_down included) — were diffed against this file and live in
+// SmallSortPrimitives.cs (with the Freeze dispatch config); only the ipnsort-specific
+// layers live here. Rust's MaybeUninit stack arrays become stackalloc over a byte buffer
+// for unmanaged T (smallsort.rs:114-123, 241) and an ArrayPool rental for reference
+// types — upstream stack-allocates either way, C# cannot stackalloc unconstrained T.
+// CopyOnDrop / ManuallyDrop panic machinery has no port: an exception from the
+// comparator leaves an unspecified state.
 using System;
 using System.Buffers;
 using System.Runtime.CompilerServices;
@@ -32,9 +32,9 @@ internal enum IpnSmallSortKind
 /// — insertion sort, threshold 16 — which this config folds into Fallback.</summary>
 internal static class IpnSmallSortConfig<T>
 {
-    /// <summary>Rust's Freeze auto-trait: no interior mutability. Same predicate the
-    /// DriftSmallSort port established (SmallSortConfig&lt;T&gt;.IsFreezeLike): value types
-    /// without managed references plus reference types themselves.</summary>
+    /// <summary>Rust's Freeze auto-trait: no interior mutability. The shared predicate
+    /// (SmallSortConfig&lt;T&gt;.IsFreezeLike, SmallSortPrimitives.cs): value types without
+    /// managed references plus reference types themselves.</summary>
     internal static readonly bool IsFreezeLike = SmallSortConfig<T>.IsFreezeLike;
 
     /// <summary>Rust T::IS_COPY (smallsort.rs:773-783): a C# unmanaged value type.</summary>
@@ -119,7 +119,7 @@ internal static class IpnSmallSort
             default:
                 // small_sort_fallback (smallsort.rs:107-111).
                 if (v.Length >= 2)
-                    DriftSmallSort.InsertionSortShiftLeft(v, cmp, 1);
+                    SmallSortPrimitives.InsertionSortShiftLeft(v, cmp, 1);
                 break;
         }
     }
@@ -179,7 +179,7 @@ internal static class IpnSmallSort
                 presortedLen = 1;
             }
 
-            DriftSmallSort.InsertionSortShiftLeft(v.Slice(regionStart, regionLen), cmp, presortedLen);
+            SmallSortPrimitives.InsertionSortShiftLeft(v.Slice(regionStart, regionLen), cmp, presortedLen);
 
             if (noMerge)
                 return;
@@ -192,7 +192,7 @@ internal static class IpnSmallSort
         }
 
         // bidirectional_merge into scratch, then copy back (smallsort.rs:281-289).
-        DriftSmallSort.BidirectionalMerge(ref vBase, len, ref scratchBase, cmp);
+        SmallSortPrimitives.BidirectionalMerge(ref vBase, len, ref scratchBase, cmp);
         scratch[..len].CopyTo(v);
     }
 
@@ -323,7 +323,8 @@ internal static class IpnSmallSort
     /// Unmanaged T gets a stackalloc'd byte buffer reinterpreted as Span&lt;T&gt;
     /// (upstream MaybeUninit&lt;[T; 48]&gt;, guaranteed by the General size bound);
     /// reference types rent from the ArrayPool — C# cannot stackalloc managed T
-    /// (the repo's GlideSmallSort established this two-branch pattern).</summary>
+    /// (a two-branch pattern this port applies uniformly: stackalloc for unmanaged T,
+    /// ArrayPool for reference-carrying T).</summary>
     private static void SmallSortGeneral<T, TC>(Span<T> v, TC cmp) where TC : struct, IIsLess<T>
     {
         if (RuntimeHelpers.IsReferenceOrContainsReferences<T>())
@@ -370,10 +371,10 @@ internal static class IpnSmallSort
         if (Unsafe.SizeOf<T>() <= 16 && len >= 16)
         {
             // First half: v[0..8] into scratch[0..8], ping-ponging through scratch[len..].
-            DriftSmallSort.Sort8Stable(ref vBase, ref scratchBase, ref Unsafe.Add(ref scratchBase, len), cmp);
+            SmallSortPrimitives.Sort8Stable(ref vBase, ref scratchBase, ref Unsafe.Add(ref scratchBase, len), cmp);
             // Second half: v[lenDiv2..lenDiv2+8] into scratch[lenDiv2..lenDiv2+8],
             // ping-ponging through scratch[len+8..len+16].
-            DriftSmallSort.Sort8Stable(
+            SmallSortPrimitives.Sort8Stable(
                 ref Unsafe.Add(ref vBase, lenDiv2),
                 ref Unsafe.Add(ref scratchBase, lenDiv2),
                 ref Unsafe.Add(ref scratchBase, len + 8), cmp);
@@ -381,8 +382,8 @@ internal static class IpnSmallSort
         }
         else if (len >= 8)
         {
-            DriftSmallSort.Sort4Stable(ref vBase, ref scratchBase, cmp);
-            DriftSmallSort.Sort4Stable(
+            SmallSortPrimitives.Sort4Stable(ref vBase, ref scratchBase, cmp);
+            SmallSortPrimitives.Sort4Stable(
                 ref Unsafe.Add(ref vBase, lenDiv2), ref Unsafe.Add(ref scratchBase, lenDiv2), cmp);
             presortedLen = 4;
         }
@@ -403,12 +404,12 @@ internal static class IpnSmallSort
             for (int i = presortedLen; i < desiredLen; i++)
             {
                 Unsafe.Add(ref dst, i) = Unsafe.Add(ref src, i);
-                DriftSmallSort.InsertTail(ref dst, i, cmp);
+                SmallSortPrimitives.InsertTail(ref dst, i, cmp);
             }
         }
 
         // Both halves of scratch are sorted: merge them back into v (smallsort.rs:200-204).
-        DriftSmallSort.BidirectionalMerge(ref scratchBase, len, ref vBase, cmp);
+        SmallSortPrimitives.BidirectionalMerge(ref scratchBase, len, ref vBase, cmp);
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]

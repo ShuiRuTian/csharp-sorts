@@ -60,7 +60,7 @@ public static class Ipnsort
 
         if (len <= MaxLenAlwaysInsertionSort)
         {
-            DriftSmallSort.InsertionSortShiftLeft(v, cmp, 1);
+            SmallSortPrimitives.InsertionSortShiftLeft(v, cmp, 1);
             return;
         }
 

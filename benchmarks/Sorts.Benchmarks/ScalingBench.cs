@@ -5,7 +5,7 @@ namespace Sorts.Benchmarks;
 
 /// <summary>Scaling curve: int, Random distribution, sixteen sizes from 10 to 512k
 /// (small-array kernel zone 10-500, then doubling steps with 2^16/2^19
-/// checkpoints) × 5 implementations. Log-log slope of Array.Sort vs ours shows
+/// checkpoints) × 2 implementations. Log-log slope of Array.Sort vs Ipnsort shows
 /// where the cache behaviour diverges. (A 10M stress point and the 1M checkpoint
 /// were cut — 4-40MB working sets are far outside realistic sort payloads and
 /// dominated the whole run.)</summary>

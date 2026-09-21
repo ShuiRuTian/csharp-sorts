@@ -20,8 +20,8 @@ internal static class Ring
     public const int Size = 64;
 }
 
-/// <summary>Shared plumbing for the three matrices: template init + the five benchmark
-/// methods (Array.Sort baseline + our four sorts). Derived classes declare the
+/// <summary>Shared plumbing for the three matrices: template init + the two benchmark
+/// methods (Array.Sort baseline + Ipnsort). Derived classes declare the
 /// [Params] and build the template in [GlobalSetup] via Init. Every invocation
 /// consumes one fresh clone from the ring — no IterationSetup (see RingData.cs).</summary>
 public abstract class SortMatrixBase<T> where T : IComparable<T>
@@ -42,20 +42,11 @@ public abstract class SortMatrixBase<T> where T : IComparable<T>
     public void ArraySort_Generic() => Array.Sort(_ring.Next());
 
     [Benchmark]
-    public void QuadSort() => Sorts.QuadSort.Sort(_ring.Next());
-
-    [Benchmark]
-    public void GlideSort() => Sorts.GlideSort.Sort(_ring.Next());
-
-    [Benchmark]
-    public void DriftSort() => Sorts.DriftSort.Sort(_ring.Next());
-
-    [Benchmark]
     public void Ipnsort() => Sorts.Ipnsort.Sort(_ring.Next());
 }
 
-/// <summary>Core matrix: all 12 distributions × 2 sizes × 5 implementations — the main
-/// adaptivity/robustness grid (24 parameter cases, 120 benchmark cases). The 1M
+/// <summary>Core matrix: all 12 distributions × 2 sizes × 2 implementations — the main
+/// adaptivity/robustness grid (24 parameter cases, 48 benchmark cases). The 1M
 /// point was cut: 4MB working sets exceed realistic sort payloads and dominated
 /// the run; the scaling curve lives in ScalingBench.</summary>
 [Config(typeof(BenchConfig))]

@@ -1,122 +1,42 @@
-// Ported from https://github.com/orlp/driftsort, MIT OR Apache-2.0, by Orson Peters & Lukas Bergdoll.
-// C# port 2026 — smallsort.rs: the SmallSortTypeImpl dispatch, the small-sort network
-// (sort_small_general) and insertion_sort_shift_left.
+// Ported from https://github.com/Voultapher/sort-research-rs (ipnsort src/smallsort.rs),
+// MIT OR Apache-2.0, by Orson Peters & Lukas Bergdoll. C# port 2026 — the small-sort
+// primitives upstream ships identically in driftsort's smallsort.rs and ipnsort's:
+// insertion_sort_shift_left, insert_tail, sort4_stable, sort8_stable and
+// bidirectional_merge (merge_up/merge_down included), plus the Freeze dispatch config.
 //
 // Rust's MaybeUninit scratch exists because the sort moves elements through memory the
-// borrow checker cannot prove initialized; this port keeps the identical scratch layout
-// contract (the sort8 ping-pong regions need len + 17 elements, smallsort.rs:76-78) but
-// performs every element move as a plain copy on a real Span<T>, write-before-read by
-// construction. The CopyOnDrop guards (smallsort.rs:129-146, 190-194) are panic-recovery
-// only — upstream forgets them on the success path — so they have no port: an exception
-// from the comparator leaves the buffers in an unspecified state, the same policy
-// GlideSmallSort adopted.
+// borrow checker cannot prove initialized; this port performs every element move as a
+// plain copy on a real Span<T>, write-before-read by construction. The CopyOnDrop
+// guards are panic-recovery only — upstream forgets them on the success path — so they
+// have no port: an exception from the comparator leaves the buffers in an unspecified
+// state.
 using System;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 namespace Sorts;
 
-/// <summary>DriftSort small-sort kernel (upstream smallsort.rs): sorts spans of at most
-/// Threshold&lt;T&gt;() elements in place, either with the branchless presort + bidirectional
-/// merge network (Freeze-like T) or insertion sort.</summary>
-internal static class DriftSmallSort
+/// <summary>Freeze dispatch config (smallsort.rs:16-64): Freeze types take the
+/// optimized network paths, everything else insertion sort. Upstream's dispatch is
+/// Freeze-only with no size bound (smallsort.rs:50 `impl&lt;T: crate::Freeze&gt;`).
+/// Rust's Freeze auto-trait (no interior mutability) INCLUDES String/&amp;T/Box, so
+/// upstream runs the networks for managed element types; a copied C# reference aliases
+/// the same object, so compares-on-copies are equally hazard-free here. Managed types
+/// therefore qualify too; only value types CONTAINING managed references are excluded
+/// (conservative — upstream has no such types to check against).</summary>
+internal static class SmallSortConfig<T>
 {
-    /// <summary>Upstream MIN_SMALL_SORT_SCRATCH_LEN (smallsort.rs:48) — the scratch every
-    /// SortSmall call must supply. Upstream computes i32::SMALL_SORT_THRESHOLD + 17 = 49;
-    /// the interface pins 50, which still satisfies every internal requirement
-    /// (len + 17 for len &lt;= 32).</summary>
-    internal const int MinSmallSortScratchLen = 50;
+    /// <summary>Whether T qualifies for the network small-sort paths; otherwise
+    /// callers fall back to insertion_sort_shift_left.</summary>
+    internal static readonly bool IsFreezeLike =
+        !typeof(T).IsValueType || !RuntimeHelpers.IsReferenceOrContainsReferences<T>();
+}
 
-    /// <summary>Upstream SMALL_SORT_THRESHOLD (smallsort.rs:28 default, :54 Freeze impl
-    /// — Freeze-only, no size bound): 32 for Freeze-like T, else 16.</summary>
-    internal static int Threshold<T>() => SmallSortConfig<T>.IsFreezeLike ? 32 : 16;
-
-    /// <summary>sort_small (smallsort.rs:20-24 dispatch; :30-45 default impl;
-    /// :56-63 Freeze impl): sorts v, v.Length &lt;= Threshold&lt;T&gt;(), in place. scratch must
-    /// supply at least MinSmallSortScratchLen elements. Upstream aborts on violated
-    /// contracts — this seam throws instead.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static void SortSmall<T, TC>(Span<T> v, Span<T> scratch, TC cmp) where TC : struct, IIsLess<T>
-    {
-        if (v.Length > Threshold<T>())
-            ThrowTooLong(v.Length, Threshold<T>());
-        if (scratch.Length < MinSmallSortScratchLen)
-            ThrowScratchTooSmall(scratch.Length, MinSmallSortScratchLen);
-
-        if (SmallSortConfig<T>.IsFreezeLike)
-        {
-            SortSmallGeneral(v, scratch, cmp);
-        }
-        else if (v.Length >= 2)
-        {
-            // Default impl: plain insertion sort. Upstream needs one scratch element as
-            // the insert gap; the local-copy port needs none (scratch guaranteed non-empty
-            // by the seam guard above, mirroring upstream's abort at smallsort.rs:36-38).
-            InsertionSortShiftLeft(v, cmp, 1);
-        }
-    }
-
-    /// <summary>sort_small_general (smallsort.rs:66-148): presort both halves of v into
-    /// scratch with a stable sort4/sort8 network, extend each to a full half with
-    /// insert_tail, then bidirectional_merge scratch back into v.</summary>
-    [MethodImpl(MethodImplOptions.NoInlining)] // upstream #[inline(never)] (smallsort.rs:56)
-    private static void SortSmallGeneral<T, TC>(Span<T> v, Span<T> scratch, TC cmp) where TC : struct, IIsLess<T>
-    {
-        int len = v.Length;
-        if (len < 2)
-            return;
-        if (scratch.Length < len + 17)
-            ThrowScratchTooSmall(scratch.Length, len + 17); // upstream abort (smallsort.rs:76-78)
-
-        ref T vBase = ref MemoryMarshal.GetReference(v);
-        ref T scratchBase = ref MemoryMarshal.GetReference(scratch);
-        int lenDiv2 = len / 2;
-
-        int presortedLen;
-        if (Unsafe.SizeOf<T>() <= 16 && len >= 16)
-        {
-            // First half: v[0..8] into scratch[0..8], ping-ponging through scratch[len..].
-            Sort8Stable(ref vBase, ref scratchBase, ref Unsafe.Add(ref scratchBase, len), cmp);
-            // Second half: v[lenDiv2..lenDiv2+8] into scratch[lenDiv2..lenDiv2+8],
-            // ping-ponging through scratch[len+8..len+16].
-            Sort8Stable(
-                ref Unsafe.Add(ref vBase, lenDiv2),
-                ref Unsafe.Add(ref scratchBase, lenDiv2),
-                ref Unsafe.Add(ref scratchBase, len + 8), cmp);
-            presortedLen = 8;
-        }
-        else if (len >= 8)
-        {
-            Sort4Stable(ref vBase, ref scratchBase, cmp);
-            Sort4Stable(ref Unsafe.Add(ref vBase, lenDiv2), ref Unsafe.Add(ref scratchBase, lenDiv2), cmp);
-            presortedLen = 4;
-        }
-        else
-        {
-            scratchBase = vBase;
-            Unsafe.Add(ref scratchBase, lenDiv2) = Unsafe.Add(ref vBase, lenDiv2);
-            presortedLen = 1;
-        }
-
-        // Extend each presorted half to its full length in scratch (smallsort.rs:112-127).
-        for (int half = 0; half < 2; half++)
-        {
-            int offset = half == 0 ? 0 : lenDiv2;
-            ref T src = ref Unsafe.Add(ref vBase, offset);
-            ref T dst = ref Unsafe.Add(ref scratchBase, offset);
-            int desiredLen = half == 0 ? lenDiv2 : len - lenDiv2;
-            for (int i = presortedLen; i < desiredLen; i++)
-            {
-                Unsafe.Add(ref dst, i) = Unsafe.Add(ref src, i);
-                InsertTail(ref dst, i, cmp);
-            }
-        }
-
-        // Both halves of scratch are sorted: merge them back into v. Upstream wraps this
-        // in CopyOnDrop for panic recovery and forgets it on success (smallsort.rs:129-146).
-        BidirectionalMerge(ref scratchBase, len, ref vBase, cmp);
-    }
-
+/// <summary>The ipnsort small-sort primitives: insertion sort, the sort4/sort8 stable
+/// networks, and the bidirectional merge that combines them. Upstream ships these
+/// byte-for-byte in both driftsort's and ipnsort's smallsort.rs.</summary>
+internal static class SmallSortPrimitives
+{
     /// <summary>insertion_sort_shift_left (smallsort.rs:217-246): sort v assuming
     /// v[..start] is already sorted. Upstream aborts when start == 0 or start &gt; v.Length
     /// (smallsort.rs:224-226) — this seam throws. Upstream's scratch element becomes a
@@ -160,13 +80,6 @@ internal static class DriftSmallSort
         Unsafe.Add(ref dstBase, gap) = tmp;
     }
 
-    /// <summary>sort4_stable (smallsort.rs:250-305): optimal 5-comparison stable network
-    /// sorting vBase[0..4] into dst[0..4]; every element is copied exactly once.
-    /// Small T (JIT-constant branch, folded per instantiation): the pointer selects
-    /// of upstream become VALUE ternaries, which the JIT if-converts to csel/cmov —
-    /// the pointer-select shape itself would be a data-dependent branch. Large T:
-    /// the original conditional-ref selects (branchy, but avoids duplicating large
-    /// copies through value selects).</summary>
     /// <summary>sort4_stable (smallsort.rs:250-305): optimal 5-comparison stable network
     /// sorting vBase[0..4] into dst[0..4]; every element is copied exactly once.
     /// Small T (JIT-constant branch, folded per instantiation): the pointer selects
@@ -251,12 +164,8 @@ internal static class DriftSmallSort
 
     /// <summary>merge_up (smallsort.rs:329-360): branchless single-element merge step —
     /// the lesser of src[left]/src[right] (ties left) goes to dst[outPos], exactly one of
-    /// the two read cursors advances. KEPT AS UPSTREAM: inside BidirectionalMerge's loop
-    /// RyuJIT neither if-converts the pick (it stays a data-dependent branch either way,
-    /// JitDisasm-verified) nor eliminates the double load a locals-based value-ternary
-    /// pick introduces — the re-read costs measurably more than the branch it replaces
-    /// (BaselineBench int Random 100k: +9% DriftSort). The conditional-ref pick reads
-    /// each element exactly once.</summary>
+    /// the two read cursors advances. The conditional-ref pick reads each element
+    /// exactly once.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void SmallMergeUp<T, TC>(ref T src, ref T dst, ref int left, ref int right, ref int outPos, TC cmp)
         where TC : struct, IIsLess<T>
@@ -271,8 +180,7 @@ internal static class DriftSmallSort
 
     /// <summary>merge_down (smallsort.rs:362-393): the mirrored step at the back — the
     /// greater of src[leftRev]/src[rightRev] (ties right) goes to dst[outRev], exactly one
-    /// of the two read cursors retreats. Kept as upstream for the same measured reason
-    /// as SmallMergeUp.</summary>
+    /// of the two read cursors retreats.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void SmallMergeDown<T, TC>(ref T src, ref T dst, ref int leftRev, ref int rightRev, ref int outRev, TC cmp)
         where TC : struct, IIsLess<T>
@@ -288,11 +196,11 @@ internal static class DriftSmallSort
     /// <summary>bidirectional_merge (smallsort.rs:407-484): merges the sorted halves
     /// src[0..len/2] and src[len/2..len] into dst[0..len], one element per end per
     /// iteration (2 writes instead of quadsort's 4). len must be >= 2 — every caller
-    /// (sort_small_general len >= 2, sort8_stable len 8) guarantees it, mirroring
-    /// upstream's assume(len_div_2 != 0). Upstream's wrapping one-past-start pointers
-    /// become plain int offsets, in-bounds at every read for any comparator outcome.
-    /// T must be Freeze-like (see SmallSortConfig) — the comparator may observe outdated
-    /// temporary copies that never reach the final array.</summary>
+    /// guarantees it, mirroring upstream's assume(len_div_2 != 0). Upstream's wrapping
+    /// one-past-start pointers become plain int offsets, in-bounds at every read for
+    /// any comparator outcome. T must be Freeze-like (see SmallSortConfig) — the
+    /// comparator may observe outdated temporary copies that never reach the final
+    /// array.</summary>
     internal static void BidirectionalMerge<T, TC>(ref T src, int len, ref T dst, TC cmp) where TC : struct, IIsLess<T>
     {
         int lenDiv2 = len / 2;
@@ -333,18 +241,6 @@ internal static class DriftSmallSort
             ThrowOrdViolation();
     }
 
-    /// <summary>sort_small contract violations — upstream aborts (smallsort.rs:36-38,
-    /// 76-78; 224-226), this seam throws.</summary>
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    private static void ThrowTooLong(int len, int threshold) =>
-        throw new ArgumentException(
-            $"v.Length ({len}) violates the small-sort contract: must be <= Threshold<T>() ({threshold}).");
-
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    private static void ThrowScratchTooSmall(int scratchLen, int needed) =>
-        throw new ArgumentException(
-            $"scratch.Length ({scratchLen}) violates the small-sort contract: at least {needed} elements are required.");
-
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static void ThrowStartContract(int start, int len) =>
         throw new ArgumentException(
@@ -354,23 +250,4 @@ internal static class DriftSmallSort
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static void ThrowOrdViolation() =>
         throw new InvalidOperationException("Ord violation");
-}
-
-/// <summary>SmallSortTypeImpl type dispatch (smallsort.rs:16-64): Freeze types take the
-/// optimized network with SMALL_SORT_THRESHOLD = 32, everything else insertion sort with
-/// threshold 16. Upstream's dispatch is Freeze-only with no size bound (smallsort.rs:50
-/// `impl&lt;T: crate::Freeze&gt;`). Rust's Freeze auto-trait (lib.rs:153-160 — no interior
-/// mutability) INCLUDES String/&amp;T/Box, so upstream runs the network for managed
-/// element types; a copied C# reference aliases the same object, so the network's
-/// compares-on-copies are equally hazard-free here. Managed types therefore take the
-/// network too; only value types CONTAINING managed references stay on insertion sort
-/// (conservative — upstream has no such types to check against). The const size_of
-/// branch inside sort_small_general (smallsort.rs:88) only selects the sort8 vs
-/// sort4 presort within the network — it is not part of the dispatch.</summary>
-internal static class SmallSortConfig<T>
-{
-    /// <summary>Whether T qualifies for sort_small_general; otherwise SortSmall falls
-    /// back to insertion_sort_shift_left.</summary>
-    internal static readonly bool IsFreezeLike =
-        !typeof(T).IsValueType || !RuntimeHelpers.IsReferenceOrContainsReferences<T>();
 }
