@@ -79,7 +79,7 @@ public class CoreMatrixBench : SortMatrixBase<int>
         Distribution.Random, Distribution.Ascending, Distribution.Descending,
         Distribution.Sawtooth, Distribution.OrganPipe, Distribution.RandomD20,
         Distribution.RandomP5, Distribution.RandomS95, Distribution.Zipfian,
-        Distribution.AllEqual, Distribution.FewUnique, Distribution.RandomTail)]
+        Distribution.AllEqual, Distribution.FewUnique, Distribution.RandomMerge)]
     public Distribution Dist { get; set; }
 
     [Params(1_000, 100_000)]

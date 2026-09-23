@@ -85,7 +85,7 @@
 ## 4. Benchmark 方法论
 
 - **矩阵**：`CoreMatrixBench`（12 分布 × {1k, 100k, 1M} × 4 方法，`int[]`）；`TypeMatrixBench`（{int, double, string, Struct16, Struct128} × {Random, RandomD20, RandomS95, Zipfian} × 100k）；`ScalingBench`（1k → 10M 随机 `int[]` 12 个规模）；`BaselineBench`/`PairBench`（`Array.Sort` 变体入口与 Pair 键值结构对照，均已实测）。
-- **分布**：Random、Ascending、Descending、Sawtooth（5 齿）、OrganPipe、RandomD20（值域 0..20）、RandomP5（95% 零 + 5% 随机）、RandomS95（95% 有序 + 5% 随机尾部）、Zipfian（s≈1 重尾）、AllEqual、FewUnique（4 个不同值）、RandomTail（升序 + 末 5% 随机）。
+- **分布**：`DataGen` 已按上游 sort-research-rs 的 `patterns.rs`/`bench.rs` 重写（见 `tests/Sorts.TestData/DataGen.cs` 头部映射表）：Random（**全 i32 含负数**）、Ascending、Descending、Sawtooth（= `saw_ascending`，随机值、齿数 `round(log2 n)`）、OrganPipe（= `pipe_organ`，随机值前升后降）、RandomD20（`0..20`，值 0..=19）、RandomP5（精确 95% 零 + 5% 随机并打乱）、RandomS95（= `random_sorted(95)`，随机值前 95% 排序）、RandomMerge（= `random_merge(95)`，两段各自有序）、Zipfian（= `random_zipf(1.0)`，1..=n）、AllEqual（常数 66）、FewUnique（`0..4`）。上游基准每次用新随机种子，此处用固定 seed 20260918 以可复现。
 - **数据新鲜度（ring buffer）**：原地排序会破坏输入，而 `IterationSetup` 每个 iteration 只跑一次（一个 iteration 含多次 invocation），后续 invocation 会在已排序数据上重排——对自适应排序是毒药。方案是 `GlobalSetup` 预生成 64 份未排序克隆进环形缓冲，每次 invocation 排序下一格；游标回卷时全部从不可变模板重拷。不变量数学：InvocationCount = RingSize = 64，环恰在批次边界回卷，每个克隆每批恰被排序一次。重拷成本为每 64 次排序 64 次 `Array.Copy`（内存带宽 vs O(n log n) 比较），占比百分之几，且对所有被测方法一致。
 - **配置**：单 job、Arm64、Workstation GC、不强制 GC（观察真实分配行为而非隐藏它）、MemoryDiagnoser、P90 列、固定种子 20260918。
 - **复现命令**：
