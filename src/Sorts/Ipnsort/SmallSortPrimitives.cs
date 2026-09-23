@@ -60,6 +60,7 @@ internal static class SmallSortPrimitives
     /// identical element movement. The gap cursors are nint: they feed Unsafe.Add and are
     /// updated inside the shift loop, the x64 sign-extension case of
     /// IpnPartition.PartitionLomutoBranchlessCyclic (JitDisasm: no movsxd/cdqe remain).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static void InsertTail<T, TC>(ref T dstBase, nint tailIdx, TC cmp) where TC : struct, IIsLess<T>
     {
         nint sift = tailIdx - 1;
