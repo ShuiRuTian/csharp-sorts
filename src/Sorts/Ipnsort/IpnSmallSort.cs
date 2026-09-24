@@ -197,25 +197,103 @@ internal static class IpnSmallSort
     }
 
     /// <summary>swap_if_less (smallsort.rs:294-325): swap vBase[aPos] and vBase[bPos]
-    /// if the value at bPos is strictly less than the one at aPos. Branchless — value
-    /// ternaries over the two loads; the JIT if-converts these to csel/cmov for the
-    /// small T this network path serves (sizeof &lt;= 8, so the value copies are free).
-    /// NOTE: the former conditional-REF form (`ref (shouldSwap ? ref vB : ref vA)`)
-    /// always compiled to a data-dependent branch on both x64 and ARM64 — Roslyn
-    /// lowers conditional ref expressions to IL control flow and RyuJIT never
-    /// if-converts a byref select. JitDisasm-verified.</summary>
+    /// if the value at bPos is strictly less than the one at aPos. Branchless.
+    ///
+    /// For integer primitives under the natural-order comparer (ComparableCmp&lt;T&gt;, the
+    /// default entry) this uses Math.Min/Math.Max, which RyuJIT lowers to a single cmp +
+    /// two cmov that SHARE the flags (JitDisasm: ~11 instructions). The generic value
+    /// ternary instead materializes the bool (setcc+movzx) and re-tests it once per
+    /// select (~17 instructions) — RyuJIT does not fold cmp into the cmov condition.
+    /// Everything else (custom/inverted/interface comparers, char and nint which have no
+    /// Math.Min overload, float/double with their NaN semantics, non-primitive T) keeps
+    /// the value ternary. Equal values never swap in either path.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void SwapIfLess<T, TC>(ref T vBase, int aPos, int bPos, TC cmp) where TC : struct, IIsLess<T>
     {
-        T vA = Unsafe.Add(ref vBase, aPos);
-        T vB = Unsafe.Add(ref vBase, bPos);
+        ref T ea = ref Unsafe.Add(ref vBase, aPos);
+        ref T eb = ref Unsafe.Add(ref vBase, bPos);
 
+        if (typeof(TC) == typeof(ComparableCmp<int>) && typeof(T) == typeof(int))
+        {
+            ref int ia = ref Unsafe.As<T, int>(ref ea);
+            ref int ib = ref Unsafe.As<T, int>(ref eb);
+            int a = ia, b = ib;
+            ia = Math.Min(a, b);
+            ib = Math.Max(a, b);
+            return;
+        }
+        if (typeof(TC) == typeof(ComparableCmp<long>) && typeof(T) == typeof(long))
+        {
+            ref long ia = ref Unsafe.As<T, long>(ref ea);
+            ref long ib = ref Unsafe.As<T, long>(ref eb);
+            long a = ia, b = ib;
+            ia = Math.Min(a, b);
+            ib = Math.Max(a, b);
+            return;
+        }
+        if (typeof(TC) == typeof(ComparableCmp<uint>) && typeof(T) == typeof(uint))
+        {
+            ref uint ia = ref Unsafe.As<T, uint>(ref ea);
+            ref uint ib = ref Unsafe.As<T, uint>(ref eb);
+            uint a = ia, b = ib;
+            ia = Math.Min(a, b);
+            ib = Math.Max(a, b);
+            return;
+        }
+        if (typeof(TC) == typeof(ComparableCmp<ulong>) && typeof(T) == typeof(ulong))
+        {
+            ref ulong ia = ref Unsafe.As<T, ulong>(ref ea);
+            ref ulong ib = ref Unsafe.As<T, ulong>(ref eb);
+            ulong a = ia, b = ib;
+            ia = Math.Min(a, b);
+            ib = Math.Max(a, b);
+            return;
+        }
+        if (typeof(TC) == typeof(ComparableCmp<short>) && typeof(T) == typeof(short))
+        {
+            ref short ia = ref Unsafe.As<T, short>(ref ea);
+            ref short ib = ref Unsafe.As<T, short>(ref eb);
+            short a = ia, b = ib;
+            ia = Math.Min(a, b);
+            ib = Math.Max(a, b);
+            return;
+        }
+        if (typeof(TC) == typeof(ComparableCmp<ushort>) && typeof(T) == typeof(ushort))
+        {
+            ref ushort ia = ref Unsafe.As<T, ushort>(ref ea);
+            ref ushort ib = ref Unsafe.As<T, ushort>(ref eb);
+            ushort a = ia, b = ib;
+            ia = Math.Min(a, b);
+            ib = Math.Max(a, b);
+            return;
+        }
+        if (typeof(TC) == typeof(ComparableCmp<byte>) && typeof(T) == typeof(byte))
+        {
+            ref byte ia = ref Unsafe.As<T, byte>(ref ea);
+            ref byte ib = ref Unsafe.As<T, byte>(ref eb);
+            byte a = ia, b = ib;
+            ia = Math.Min(a, b);
+            ib = Math.Max(a, b);
+            return;
+        }
+        if (typeof(TC) == typeof(ComparableCmp<sbyte>) && typeof(T) == typeof(sbyte))
+        {
+            ref sbyte ia = ref Unsafe.As<T, sbyte>(ref ea);
+            ref sbyte ib = ref Unsafe.As<T, sbyte>(ref eb);
+            sbyte a = ia, b = ib;
+            ia = Math.Min(a, b);
+            ib = Math.Max(a, b);
+            return;
+        }
+
+        T vA = ea;
+        T vB = eb;
         bool shouldSwap = cmp.IsLess(in vB, in vA);
 
         // Value selects mirroring upstream's if-let value swap (smallsort.rs:313-316):
         // equal values never swap (is_less is false for equal).
-        Unsafe.Add(ref vBase, aPos) = shouldSwap ? vB : vA;
-        Unsafe.Add(ref vBase, bPos) = shouldSwap ? vA : vB;
+        ea = shouldSwap ? vB : vA;
+        eb = shouldSwap ? vA : vB;
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
