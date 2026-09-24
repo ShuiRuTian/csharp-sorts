@@ -196,104 +196,103 @@ internal static class IpnSmallSort
         scratch[..len].CopyTo(v);
     }
 
-    /// <summary>swap_if_less (smallsort.rs:294-325): swap vBase[aPos] and vBase[bPos]
-    /// if the value at bPos is strictly less than the one at aPos. Branchless.
+    /// <summary>compare-swap on two elements held in caller locals (the local-variable
+    /// network — see Sort9Optimal/Sort13Optimal): places the smaller at `a` and the larger
+    /// at `b`, branchless. Operating on locals lets RyuJIT keep the whole network in
+    /// registers; the previous array form (`ref vBase`+pos) reloaded and stored both
+    /// elements on every comparison because the JIT cannot prove no aliasing (JitDisasm:
+    /// sort9 261 instructions array-form vs 129 local-form; LLVM's equivalent is 131).
     ///
     /// For integer primitives under the natural-order comparer (ComparableCmp&lt;T&gt;, the
     /// default entry) this uses Math.Min/Math.Max, which RyuJIT lowers to a single cmp +
-    /// two cmov that SHARE the flags (JitDisasm: ~11 instructions). The generic value
-    /// ternary instead materializes the bool (setcc+movzx) and re-tests it once per
-    /// select (~17 instructions) — RyuJIT does not fold cmp into the cmov condition.
-    /// Everything else (custom/inverted/interface comparers, char and nint which have no
-    /// Math.Min overload, float/double with their NaN semantics, non-primitive T) keeps
-    /// the value ternary. Equal values never swap in either path.</summary>
+    /// two cmov that SHARE the flags (~11 instructions). Everything else (custom/inverted/
+    /// interface comparers, char and nint which have no Math.Min overload, float/double
+    /// with their NaN semantics, non-primitive T) keeps the value ternary. Equal values
+    /// never swap in either path.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void SwapIfLess<T, TC>(ref T vBase, int aPos, int bPos, TC cmp) where TC : struct, IIsLess<T>
+    private static void CompareSwap<T, TC>(ref T a, ref T b, TC cmp) where TC : struct, IIsLess<T>
     {
-        ref T ea = ref Unsafe.Add(ref vBase, aPos);
-        ref T eb = ref Unsafe.Add(ref vBase, bPos);
-
         if (typeof(TC) == typeof(ComparableCmp<int>) && typeof(T) == typeof(int))
         {
-            ref int ia = ref Unsafe.As<T, int>(ref ea);
-            ref int ib = ref Unsafe.As<T, int>(ref eb);
-            int a = ia, b = ib;
-            ia = Math.Min(a, b);
-            ib = Math.Max(a, b);
+            ref int ia = ref Unsafe.As<T, int>(ref a);
+            ref int ib = ref Unsafe.As<T, int>(ref b);
+            int x = ia, y = ib;
+            ia = Math.Min(x, y);
+            ib = Math.Max(x, y);
             return;
         }
         if (typeof(TC) == typeof(ComparableCmp<long>) && typeof(T) == typeof(long))
         {
-            ref long ia = ref Unsafe.As<T, long>(ref ea);
-            ref long ib = ref Unsafe.As<T, long>(ref eb);
-            long a = ia, b = ib;
-            ia = Math.Min(a, b);
-            ib = Math.Max(a, b);
+            ref long ia = ref Unsafe.As<T, long>(ref a);
+            ref long ib = ref Unsafe.As<T, long>(ref b);
+            long x = ia, y = ib;
+            ia = Math.Min(x, y);
+            ib = Math.Max(x, y);
             return;
         }
         if (typeof(TC) == typeof(ComparableCmp<uint>) && typeof(T) == typeof(uint))
         {
-            ref uint ia = ref Unsafe.As<T, uint>(ref ea);
-            ref uint ib = ref Unsafe.As<T, uint>(ref eb);
-            uint a = ia, b = ib;
-            ia = Math.Min(a, b);
-            ib = Math.Max(a, b);
+            ref uint ia = ref Unsafe.As<T, uint>(ref a);
+            ref uint ib = ref Unsafe.As<T, uint>(ref b);
+            uint x = ia, y = ib;
+            ia = Math.Min(x, y);
+            ib = Math.Max(x, y);
             return;
         }
         if (typeof(TC) == typeof(ComparableCmp<ulong>) && typeof(T) == typeof(ulong))
         {
-            ref ulong ia = ref Unsafe.As<T, ulong>(ref ea);
-            ref ulong ib = ref Unsafe.As<T, ulong>(ref eb);
-            ulong a = ia, b = ib;
-            ia = Math.Min(a, b);
-            ib = Math.Max(a, b);
+            ref ulong ia = ref Unsafe.As<T, ulong>(ref a);
+            ref ulong ib = ref Unsafe.As<T, ulong>(ref b);
+            ulong x = ia, y = ib;
+            ia = Math.Min(x, y);
+            ib = Math.Max(x, y);
             return;
         }
         if (typeof(TC) == typeof(ComparableCmp<short>) && typeof(T) == typeof(short))
         {
-            ref short ia = ref Unsafe.As<T, short>(ref ea);
-            ref short ib = ref Unsafe.As<T, short>(ref eb);
-            short a = ia, b = ib;
-            ia = Math.Min(a, b);
-            ib = Math.Max(a, b);
+            ref short ia = ref Unsafe.As<T, short>(ref a);
+            ref short ib = ref Unsafe.As<T, short>(ref b);
+            short x = ia, y = ib;
+            ia = Math.Min(x, y);
+            ib = Math.Max(x, y);
             return;
         }
         if (typeof(TC) == typeof(ComparableCmp<ushort>) && typeof(T) == typeof(ushort))
         {
-            ref ushort ia = ref Unsafe.As<T, ushort>(ref ea);
-            ref ushort ib = ref Unsafe.As<T, ushort>(ref eb);
-            ushort a = ia, b = ib;
-            ia = Math.Min(a, b);
-            ib = Math.Max(a, b);
+            ref ushort ia = ref Unsafe.As<T, ushort>(ref a);
+            ref ushort ib = ref Unsafe.As<T, ushort>(ref b);
+            ushort x = ia, y = ib;
+            ia = Math.Min(x, y);
+            ib = Math.Max(x, y);
             return;
         }
         if (typeof(TC) == typeof(ComparableCmp<byte>) && typeof(T) == typeof(byte))
         {
-            ref byte ia = ref Unsafe.As<T, byte>(ref ea);
-            ref byte ib = ref Unsafe.As<T, byte>(ref eb);
-            byte a = ia, b = ib;
-            ia = Math.Min(a, b);
-            ib = Math.Max(a, b);
+            ref byte ia = ref Unsafe.As<T, byte>(ref a);
+            ref byte ib = ref Unsafe.As<T, byte>(ref b);
+            byte x = ia, y = ib;
+            ia = Math.Min(x, y);
+            ib = Math.Max(x, y);
             return;
         }
         if (typeof(TC) == typeof(ComparableCmp<sbyte>) && typeof(T) == typeof(sbyte))
         {
-            ref sbyte ia = ref Unsafe.As<T, sbyte>(ref ea);
-            ref sbyte ib = ref Unsafe.As<T, sbyte>(ref eb);
-            sbyte a = ia, b = ib;
-            ia = Math.Min(a, b);
-            ib = Math.Max(a, b);
+            ref sbyte ia = ref Unsafe.As<T, sbyte>(ref a);
+            ref sbyte ib = ref Unsafe.As<T, sbyte>(ref b);
+            sbyte x = ia, y = ib;
+            ia = Math.Min(x, y);
+            ib = Math.Max(x, y);
             return;
         }
 
-        T vA = ea;
-        T vB = eb;
-        bool shouldSwap = cmp.IsLess(in vB, in vA);
+        T px = a;
+        T py = b;
+        bool shouldSwap = cmp.IsLess(in py, in px);
 
         // Value selects mirroring upstream's if-let value swap (smallsort.rs:313-316):
         // equal values never swap (is_less is false for equal).
-        ea = shouldSwap ? vB : vA;
-        eb = shouldSwap ? vA : vB;
+        a = shouldSwap ? py : px;
+        b = shouldSwap ? px : py;
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
@@ -303,94 +302,149 @@ internal static class IpnSmallSort
 
     /// <summary>sort9_optimal (smallsort.rs:329-371): optimal sorting network, see
     /// https://bertdobbelaere.github.io/sorting-networks.html — hand-ported
-    /// comparison-for-comparison. Never inlined upstream to avoid code bloat.</summary>
+    /// comparison-for-comparison. Never inlined upstream to avoid code bloat.
+    ///
+    /// Local-variable form: load the 9 elements once, run the network on locals (which
+    /// RyuJIT keeps in registers), store once. The array form reloaded/stored both
+    /// elements on every comparison because the JIT cannot prove no aliasing (JitDisasm:
+    /// 261 instructions array-form vs 129 local-form).</summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static void Sort9Optimal<T, TC>(ref T vBase, int len, TC cmp) where TC : struct, IIsLess<T>
     {
         if (len < 9)
             ThrowOptimalNetworkLen(9);
 
-        SwapIfLess(ref vBase, 0, 3, cmp);
-        SwapIfLess(ref vBase, 1, 7, cmp);
-        SwapIfLess(ref vBase, 2, 5, cmp);
-        SwapIfLess(ref vBase, 4, 8, cmp);
-        SwapIfLess(ref vBase, 0, 7, cmp);
-        SwapIfLess(ref vBase, 2, 4, cmp);
-        SwapIfLess(ref vBase, 3, 8, cmp);
-        SwapIfLess(ref vBase, 5, 6, cmp);
-        SwapIfLess(ref vBase, 0, 2, cmp);
-        SwapIfLess(ref vBase, 1, 3, cmp);
-        SwapIfLess(ref vBase, 4, 5, cmp);
-        SwapIfLess(ref vBase, 7, 8, cmp);
-        SwapIfLess(ref vBase, 1, 4, cmp);
-        SwapIfLess(ref vBase, 3, 6, cmp);
-        SwapIfLess(ref vBase, 5, 7, cmp);
-        SwapIfLess(ref vBase, 0, 1, cmp);
-        SwapIfLess(ref vBase, 2, 4, cmp);
-        SwapIfLess(ref vBase, 3, 5, cmp);
-        SwapIfLess(ref vBase, 6, 8, cmp);
-        SwapIfLess(ref vBase, 2, 3, cmp);
-        SwapIfLess(ref vBase, 4, 5, cmp);
-        SwapIfLess(ref vBase, 6, 7, cmp);
-        SwapIfLess(ref vBase, 1, 2, cmp);
-        SwapIfLess(ref vBase, 3, 4, cmp);
-        SwapIfLess(ref vBase, 5, 6, cmp);
+        T v0 = Unsafe.Add(ref vBase, 0);
+        T v1 = Unsafe.Add(ref vBase, 1);
+        T v2 = Unsafe.Add(ref vBase, 2);
+        T v3 = Unsafe.Add(ref vBase, 3);
+        T v4 = Unsafe.Add(ref vBase, 4);
+        T v5 = Unsafe.Add(ref vBase, 5);
+        T v6 = Unsafe.Add(ref vBase, 6);
+        T v7 = Unsafe.Add(ref vBase, 7);
+        T v8 = Unsafe.Add(ref vBase, 8);
+
+        CompareSwap(ref v0, ref v3, cmp);
+        CompareSwap(ref v1, ref v7, cmp);
+        CompareSwap(ref v2, ref v5, cmp);
+        CompareSwap(ref v4, ref v8, cmp);
+        CompareSwap(ref v0, ref v7, cmp);
+        CompareSwap(ref v2, ref v4, cmp);
+        CompareSwap(ref v3, ref v8, cmp);
+        CompareSwap(ref v5, ref v6, cmp);
+        CompareSwap(ref v0, ref v2, cmp);
+        CompareSwap(ref v1, ref v3, cmp);
+        CompareSwap(ref v4, ref v5, cmp);
+        CompareSwap(ref v7, ref v8, cmp);
+        CompareSwap(ref v1, ref v4, cmp);
+        CompareSwap(ref v3, ref v6, cmp);
+        CompareSwap(ref v5, ref v7, cmp);
+        CompareSwap(ref v0, ref v1, cmp);
+        CompareSwap(ref v2, ref v4, cmp);
+        CompareSwap(ref v3, ref v5, cmp);
+        CompareSwap(ref v6, ref v8, cmp);
+        CompareSwap(ref v2, ref v3, cmp);
+        CompareSwap(ref v4, ref v5, cmp);
+        CompareSwap(ref v6, ref v7, cmp);
+        CompareSwap(ref v1, ref v2, cmp);
+        CompareSwap(ref v3, ref v4, cmp);
+        CompareSwap(ref v5, ref v6, cmp);
+
+        Unsafe.Add(ref vBase, 0) = v0;
+        Unsafe.Add(ref vBase, 1) = v1;
+        Unsafe.Add(ref vBase, 2) = v2;
+        Unsafe.Add(ref vBase, 3) = v3;
+        Unsafe.Add(ref vBase, 4) = v4;
+        Unsafe.Add(ref vBase, 5) = v5;
+        Unsafe.Add(ref vBase, 6) = v6;
+        Unsafe.Add(ref vBase, 7) = v7;
+        Unsafe.Add(ref vBase, 8) = v8;
     }
 
     /// <summary>sort13_optimal (smallsort.rs:375-437): optimal sorting network, see
     /// https://bertdobbelaere.github.io/sorting-networks.html — hand-ported
-    /// comparison-for-comparison. Never inlined upstream to avoid code bloat.</summary>
+    /// comparison-for-comparison. Never inlined upstream to avoid code bloat.
+    /// Local-variable form (see Sort9Optimal); 13 live values may spill for 8-byte T, but
+    /// still avoids the per-comparison array reload/store.</summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static void Sort13Optimal<T, TC>(ref T vBase, int len, TC cmp) where TC : struct, IIsLess<T>
     {
         if (len < 13)
             ThrowOptimalNetworkLen(13);
 
-        SwapIfLess(ref vBase, 0, 12, cmp);
-        SwapIfLess(ref vBase, 1, 10, cmp);
-        SwapIfLess(ref vBase, 2, 9, cmp);
-        SwapIfLess(ref vBase, 3, 7, cmp);
-        SwapIfLess(ref vBase, 5, 11, cmp);
-        SwapIfLess(ref vBase, 6, 8, cmp);
-        SwapIfLess(ref vBase, 1, 6, cmp);
-        SwapIfLess(ref vBase, 2, 3, cmp);
-        SwapIfLess(ref vBase, 4, 11, cmp);
-        SwapIfLess(ref vBase, 7, 9, cmp);
-        SwapIfLess(ref vBase, 8, 10, cmp);
-        SwapIfLess(ref vBase, 0, 4, cmp);
-        SwapIfLess(ref vBase, 1, 2, cmp);
-        SwapIfLess(ref vBase, 3, 6, cmp);
-        SwapIfLess(ref vBase, 7, 8, cmp);
-        SwapIfLess(ref vBase, 9, 10, cmp);
-        SwapIfLess(ref vBase, 11, 12, cmp);
-        SwapIfLess(ref vBase, 4, 6, cmp);
-        SwapIfLess(ref vBase, 5, 9, cmp);
-        SwapIfLess(ref vBase, 8, 11, cmp);
-        SwapIfLess(ref vBase, 10, 12, cmp);
-        SwapIfLess(ref vBase, 0, 5, cmp);
-        SwapIfLess(ref vBase, 3, 8, cmp);
-        SwapIfLess(ref vBase, 4, 7, cmp);
-        SwapIfLess(ref vBase, 6, 11, cmp);
-        SwapIfLess(ref vBase, 9, 10, cmp);
-        SwapIfLess(ref vBase, 0, 1, cmp);
-        SwapIfLess(ref vBase, 2, 5, cmp);
-        SwapIfLess(ref vBase, 6, 9, cmp);
-        SwapIfLess(ref vBase, 7, 8, cmp);
-        SwapIfLess(ref vBase, 10, 11, cmp);
-        SwapIfLess(ref vBase, 1, 3, cmp);
-        SwapIfLess(ref vBase, 2, 4, cmp);
-        SwapIfLess(ref vBase, 5, 6, cmp);
-        SwapIfLess(ref vBase, 9, 10, cmp);
-        SwapIfLess(ref vBase, 1, 2, cmp);
-        SwapIfLess(ref vBase, 3, 4, cmp);
-        SwapIfLess(ref vBase, 5, 7, cmp);
-        SwapIfLess(ref vBase, 6, 8, cmp);
-        SwapIfLess(ref vBase, 2, 3, cmp);
-        SwapIfLess(ref vBase, 4, 5, cmp);
-        SwapIfLess(ref vBase, 6, 7, cmp);
-        SwapIfLess(ref vBase, 8, 9, cmp);
-        SwapIfLess(ref vBase, 3, 4, cmp);
-        SwapIfLess(ref vBase, 5, 6, cmp);
+        T v0 = Unsafe.Add(ref vBase, 0);
+        T v1 = Unsafe.Add(ref vBase, 1);
+        T v2 = Unsafe.Add(ref vBase, 2);
+        T v3 = Unsafe.Add(ref vBase, 3);
+        T v4 = Unsafe.Add(ref vBase, 4);
+        T v5 = Unsafe.Add(ref vBase, 5);
+        T v6 = Unsafe.Add(ref vBase, 6);
+        T v7 = Unsafe.Add(ref vBase, 7);
+        T v8 = Unsafe.Add(ref vBase, 8);
+        T v9 = Unsafe.Add(ref vBase, 9);
+        T v10 = Unsafe.Add(ref vBase, 10);
+        T v11 = Unsafe.Add(ref vBase, 11);
+        T v12 = Unsafe.Add(ref vBase, 12);
+
+        CompareSwap(ref v0, ref v12, cmp);
+        CompareSwap(ref v1, ref v10, cmp);
+        CompareSwap(ref v2, ref v9, cmp);
+        CompareSwap(ref v3, ref v7, cmp);
+        CompareSwap(ref v5, ref v11, cmp);
+        CompareSwap(ref v6, ref v8, cmp);
+        CompareSwap(ref v1, ref v6, cmp);
+        CompareSwap(ref v2, ref v3, cmp);
+        CompareSwap(ref v4, ref v11, cmp);
+        CompareSwap(ref v7, ref v9, cmp);
+        CompareSwap(ref v8, ref v10, cmp);
+        CompareSwap(ref v0, ref v4, cmp);
+        CompareSwap(ref v1, ref v2, cmp);
+        CompareSwap(ref v3, ref v6, cmp);
+        CompareSwap(ref v7, ref v8, cmp);
+        CompareSwap(ref v9, ref v10, cmp);
+        CompareSwap(ref v11, ref v12, cmp);
+        CompareSwap(ref v4, ref v6, cmp);
+        CompareSwap(ref v5, ref v9, cmp);
+        CompareSwap(ref v8, ref v11, cmp);
+        CompareSwap(ref v10, ref v12, cmp);
+        CompareSwap(ref v0, ref v5, cmp);
+        CompareSwap(ref v3, ref v8, cmp);
+        CompareSwap(ref v4, ref v7, cmp);
+        CompareSwap(ref v6, ref v11, cmp);
+        CompareSwap(ref v9, ref v10, cmp);
+        CompareSwap(ref v0, ref v1, cmp);
+        CompareSwap(ref v2, ref v5, cmp);
+        CompareSwap(ref v6, ref v9, cmp);
+        CompareSwap(ref v7, ref v8, cmp);
+        CompareSwap(ref v10, ref v11, cmp);
+        CompareSwap(ref v1, ref v3, cmp);
+        CompareSwap(ref v2, ref v4, cmp);
+        CompareSwap(ref v5, ref v6, cmp);
+        CompareSwap(ref v9, ref v10, cmp);
+        CompareSwap(ref v1, ref v2, cmp);
+        CompareSwap(ref v3, ref v4, cmp);
+        CompareSwap(ref v5, ref v7, cmp);
+        CompareSwap(ref v6, ref v8, cmp);
+        CompareSwap(ref v2, ref v3, cmp);
+        CompareSwap(ref v4, ref v5, cmp);
+        CompareSwap(ref v6, ref v7, cmp);
+        CompareSwap(ref v8, ref v9, cmp);
+        CompareSwap(ref v3, ref v4, cmp);
+        CompareSwap(ref v5, ref v6, cmp);
+
+        Unsafe.Add(ref vBase, 0) = v0;
+        Unsafe.Add(ref vBase, 1) = v1;
+        Unsafe.Add(ref vBase, 2) = v2;
+        Unsafe.Add(ref vBase, 3) = v3;
+        Unsafe.Add(ref vBase, 4) = v4;
+        Unsafe.Add(ref vBase, 5) = v5;
+        Unsafe.Add(ref vBase, 6) = v6;
+        Unsafe.Add(ref vBase, 7) = v7;
+        Unsafe.Add(ref vBase, 8) = v8;
+        Unsafe.Add(ref vBase, 9) = v9;
+        Unsafe.Add(ref vBase, 10) = v10;
+        Unsafe.Add(ref vBase, 11) = v11;
+        Unsafe.Add(ref vBase, 12) = v12;
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
