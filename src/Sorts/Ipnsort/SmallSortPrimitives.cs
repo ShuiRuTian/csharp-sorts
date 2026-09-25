@@ -57,30 +57,37 @@ internal static class SmallSortPrimitives
     /// assuming [0, tailIdx) is already sorted, through a gap that walks left. Upstream
     /// parks the tail element in scratch_tmp and lets a CopyOnDrop guard place it into the
     /// gap on scope exit; the port saves it in a local and writes it after the loop — the
-    /// identical element movement. The gap cursors are nint: they feed Unsafe.Add and are
-    /// updated inside the shift loop, the x64 sign-extension case of
-    /// IpnPartition.PartitionLomutoBranchlessCyclic (JitDisasm: no movsxd/cdqe remain).</summary>
+    /// identical element movement. The hole is a single moving `ref T` rather than the
+    /// index pair upstream needs for gap_guard; see the loop comment for the codegen it
+    /// buys (one instruction per shift on both backends, no index sign-extension).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static void InsertTail<T, TC>(ref T dstBase, nint tailIdx, TC cmp) where TC : struct, IIsLess<T>
     {
-        nint sift = tailIdx - 1;
-        if (!cmp.IsLess(in Unsafe.Add(ref dstBase, tailIdx), in Unsafe.Add(ref dstBase, sift)))
+        // Upstream carries the hole as two indices (`gap` plus `sift = gap - 1`) because
+        // gap_guard needs a stable name for it. Carried instead as a single moving
+        // `ref T`, the JIT needs only one pointer induction variable and folds the
+        // candidate read and the hole write into scaled addressing with an immediate
+        // displacement — on ARM64 as the post-index form `str w, [p], #-sizeof(T)`.
+        // JitDisasm-verified (.NET 10, FullOpts) the loop body loses one instruction on
+        // both ends: x64 7 vs 8, ARM64 6 vs 7; code size is not larger. `-1` reads the
+        // next candidate, and the `AreSame` test is upstream's `sift == 0` boundary, so
+        // the read never falls below the first element.
+        ref T hole = ref Unsafe.Add(ref dstBase, tailIdx);
+        if (!cmp.IsLess(in hole, in Unsafe.Add(ref hole, -1)))
             return;
 
-        T tmp = Unsafe.Add(ref dstBase, tailIdx);
-        nint gap = tailIdx;
+        T tmp = hole;
         while (true)
         {
-            Unsafe.Add(ref dstBase, gap) = Unsafe.Add(ref dstBase, sift);
-            gap = sift;
-            if (sift == 0)
-                break;
-            sift--;
-            if (!cmp.IsLess(in tmp, in Unsafe.Add(ref dstBase, sift)))
-                break;
+            T candidate = Unsafe.Add(ref hole, -1);
+            hole = candidate;                                // gap_guard: fill the hole
+            hole = ref Unsafe.Add(ref hole, -1);             // move the hole one left
+            if (Unsafe.AreSame(ref hole, ref dstBase))
+                break;                                       // hole reached index 0
+            if (!cmp.IsLess(in tmp, in Unsafe.Add(ref hole, -1)))
+                break;                                       // hole found its slot
         }
-        // gap_guard drop: place the saved element into the remaining gap.
-        Unsafe.Add(ref dstBase, gap) = tmp;
+        hole = tmp;                                          // gap_guard drop: place tmp
     }
 
     /// <summary>sort4_stable (smallsort.rs:250-305): optimal 5-comparison stable network
