@@ -58,6 +58,36 @@ public class IpnSmallSortTests
     }
 
     [Fact]
+    public void NetworkPathSortsAllSpecializableIntegerTypes()
+    {
+        // Exercises the Math.Min/Max SwapIfLess specialization for every type it covers,
+        // with signed-negative and unsigned-wrap values so a signed/unsigned mix-up in the
+        // specialized branch would fail. char has no Math.Min overload and stays on the
+        // ternary fallback; it is included as the contrast case.
+        Check<sbyte>(i => (sbyte)(i * 3 - 40));
+        Check<byte>(i => (byte)((i * 37 + 5) % 256));
+        Check<short>(i => (short)(i * 1900 - 30000));
+        Check<ushort>(i => (ushort)(i * 17000 + 3));
+        Check<int>(i => i * 1234567 - 20000000);
+        Check<uint>(i => (uint)(i * 1234567u));
+        Check<long>(i => i * 12345678901L - 200000000000L);
+        Check<ulong>(i => (ulong)i * 12345678901234567UL);
+        Check<char>(i => (char)(i * 700 + 33));
+
+        static void Check<T>(Func<int, T> gen) where T : struct, IComparable<T>
+        {
+            for (int n = 0; n <= 32; n++)
+            {
+                var a = new T[n];
+                for (int i = 0; i < n; i++) a[i] = gen(i);
+                var expected = a.OrderBy(x => x).ToArray();
+                IpnSmallSort.SmallSort<T, ComparableCmp<T>>(a, new());
+                Assert.Equal(expected, a);
+            }
+        }
+    }
+
+    [Fact]
     public void NetworkPathNoMergeBoundary()
     {
         // no_merge = len < 18 (smallsort.rs:244): 17 sorts as one region, 18 splits into
