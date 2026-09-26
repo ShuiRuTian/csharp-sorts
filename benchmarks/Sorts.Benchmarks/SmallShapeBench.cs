@@ -24,5 +24,5 @@ public class SmallShapeBench : SortMatrixBase<int>
     public int N { get; set; }
 
     [GlobalSetup]
-    public void Setup() => Init(DataGen.Ints(Dist, N, Seed));
+    public void Setup() => InitPool(i => DataGen.Ints(Dist, N, Seed + i * 7919), 1024);
 }

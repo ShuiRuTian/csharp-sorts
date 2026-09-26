@@ -27,6 +27,9 @@ public abstract class SortMatrixBase<T> where T : IComparable<T>
 
     private T[] _template = null!;
     private T[] _work = null!;
+    private T[][]? _pool;
+    private int _poolSize;
+    private int _poolCursor;
 
     /// <summary>Stores the immutable unsorted template and allocates the working array.
     /// Call once from GlobalSetup, after params are populated.</summary>
@@ -36,31 +39,57 @@ public abstract class SortMatrixBase<T> where T : IComparable<T>
         _work = new T[template.Length];
     }
 
+    /// <summary>Like <see cref="Init"/> but keeps a pool of `count` DISTINCT templates and
+    /// cycles through them one per invocation. This matches upstream's
+    /// `patterns::use_random_seed_each_time()`: sorting the SAME fixed template on every
+    /// invocation lets the CPU's branch predictor train on that specific input, which
+    /// systematically favours branchy code (e.g. the branchy Hoare partition over the
+    /// branchless Lomuto one). Cycled distinct inputs defeat that training.</summary>
+    protected void InitPool(Func<int, T[]> generate, int count)
+    {
+        _pool = new T[count][];
+        for (int i = 0; i < count; i++)
+            _pool[i] = generate(i);
+        _work = new T[_pool[0].Length];
+        _poolSize = count;
+        _poolCursor = 0;
+    }
+
     /// <summary>The immutable unsorted template — read-only source for non-destructive
     /// benchmarks (e.g. LINQ OrderBy).</summary>
     protected T[] Template => _template;
 
-    /// <summary>Copies the template into the working array and returns it — the
+    /// <summary>Copies the next fresh input into the working array and returns it — the
     /// per-invocation fresh-input step for destructive benchmark methods declared by
-    /// derived classes (the base's own methods inline the same copy).</summary>
-    protected T[] Fresh()
+    /// derived classes (the base's own methods inline the same copy). With a pool, each
+    /// invocation uses a different template.</summary>
+    protected T[] Fresh() => NextInput();
+
+    private T[] NextInput()
     {
-        _template.AsSpan().CopyTo(_work);
+        if (_pool is null)
+        {
+            _template.AsSpan().CopyTo(_work);
+            return _work;
+        }
+
+        _pool[_poolCursor].AsSpan().CopyTo(_work);
+        _poolCursor++;
+        if (_poolCursor == _poolSize)
+            _poolCursor = 0;
         return _work;
     }
 
     [Benchmark(Baseline = true)]
     public void ArraySort_Generic()
     {
-        _template.AsSpan().CopyTo(_work);
-        Array.Sort(_work);
+        Array.Sort(NextInput());
     }
 
     [Benchmark]
     public void Ipnsort()
     {
-        _template.AsSpan().CopyTo(_work);
-        Sorts.Ipnsort.Sort(_work);
+        Sorts.Ipnsort.Sort(NextInput());
     }
 }
 
@@ -86,5 +115,5 @@ public class CoreMatrixBench : SortMatrixBase<int>
     public int N { get; set; }
 
     [GlobalSetup]
-    public void Setup() => Init(DataGen.Ints(Dist, N, Seed));
+    public void Setup() => InitPool(i => DataGen.Ints(Dist, N, Seed + i * 7919), N <= 4000 ? 1024 : 64);
 }
