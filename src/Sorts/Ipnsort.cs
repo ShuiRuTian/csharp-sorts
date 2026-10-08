@@ -20,7 +20,22 @@ public static class Ipnsort
         ArgumentOutOfRangeException.ThrowIfNegative(length);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(length, array.Length - index);
         if (length < 2) return;
-        SortSpan<T, ComparableCmp<T>>(array.AsSpan(index, length), scratch: default, new ComparableCmp<T>());
+
+        Span<T> span = array.AsSpan(index, length);
+
+        // Port of Array.Sort's NaN pre-pass (dotnet/runtime ArraySortHelper.cs): for the
+        // floating-point types, park every NaN at the front once so the hot comparison can
+        // use the raw '<'/'>' operator (ComparableCmp<T>) instead of the branchy CompareTo.
+        // Constant-folds away entirely for non-fp T.
+        if (typeof(T) == typeof(double) || typeof(T) == typeof(float) || typeof(T) == typeof(Half))
+        {
+            int nanCount = FloatPrepass.MoveNansToFront(span);
+            if (nanCount == length) return; // all NaN: already sorted under CompareTo
+            span = span.Slice(nanCount);
+            if (span.Length < 2) return;
+        }
+
+        SortSpan<T, ComparableCmp<T>>(span, scratch: default, new ComparableCmp<T>());
     }
 
     /// <summary>Sorts the entire array using the given comparer; a null comparer means Comparer&lt;T&gt;.Default.</summary>

@@ -30,8 +30,16 @@ internal interface IIsLess<T>
 /// comparison — 3x the instructions and mispredicting on random data in the
 /// branchless partition hot loops (JitDisasm-verified). RyuJIT folds every
 /// typeof(T) == typeof(X) test at compilation time, so non-matching arms cost
-/// nothing at runtime. Floating point is deliberately NOT specialized:
-/// CompareTo's NaN / -0.0 semantics differ from the &lt; operator.
+/// nothing at runtime. The primitive arms use the runtime's own `(T)(object)`
+/// cast idiom (ArraySortHelper's LessThan/GreaterThan): RyuJIT folds the typeof
+/// tests and elides the box/unbox entirely — verified zero allocations and a
+/// single native compare per arm.
+/// Floating point IS specialized below, sound only because
+/// the default comparable entry runs FloatPrepass.MoveNansToFront first: with every
+/// NaN parked at the front the remaining slice is NaN-free and the raw &gt; operator
+/// agrees with CompareTo exactly (including -0.0 == +0.0). Any other caller of this
+/// comparer on a float/double/Half span MUST run the same pre-pass; previously
+/// floating point was left on CompareTo precisely because of that obligation.
 /// Enums fall through to CompareTo (T is the enum type, not its underlying
 /// primitive).
 ///
@@ -58,60 +66,18 @@ internal readonly struct ComparableCmp<T> : IIsLess<T> where T : IComparable<T>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool IsLess(in T x, in T y)
     {
-        if (typeof(T) == typeof(int))
-        {
-            int xi = Unsafe.As<T, int>(ref Unsafe.AsRef(in x));
-            int yi = Unsafe.As<T, int>(ref Unsafe.AsRef(in y));
-            return yi > xi; // x < y ⟺ y > x — see interface remarks
-        }
-        if (typeof(T) == typeof(long))
-        {
-            long xl = Unsafe.As<T, long>(ref Unsafe.AsRef(in x));
-            long yl = Unsafe.As<T, long>(ref Unsafe.AsRef(in y));
-            return yl > xl;
-        }
-        if (typeof(T) == typeof(uint))
-        {
-            uint xu = Unsafe.As<T, uint>(ref Unsafe.AsRef(in x));
-            uint yu = Unsafe.As<T, uint>(ref Unsafe.AsRef(in y));
-            return yu > xu;
-        }
-        if (typeof(T) == typeof(ulong))
-        {
-            ulong xul = Unsafe.As<T, ulong>(ref Unsafe.AsRef(in x));
-            ulong yul = Unsafe.As<T, ulong>(ref Unsafe.AsRef(in y));
-            return yul > xul;
-        }
-        if (typeof(T) == typeof(short))
-        {
-            short xs = Unsafe.As<T, short>(ref Unsafe.AsRef(in x));
-            short ys = Unsafe.As<T, short>(ref Unsafe.AsRef(in y));
-            return ys > xs;
-        }
-        if (typeof(T) == typeof(ushort))
-        {
-            ushort xus = Unsafe.As<T, ushort>(ref Unsafe.AsRef(in x));
-            ushort yus = Unsafe.As<T, ushort>(ref Unsafe.AsRef(in y));
-            return yus > xus;
-        }
-        if (typeof(T) == typeof(byte))
-        {
-            byte xb = Unsafe.As<T, byte>(ref Unsafe.AsRef(in x));
-            byte yb = Unsafe.As<T, byte>(ref Unsafe.AsRef(in y));
-            return yb > xb;
-        }
-        if (typeof(T) == typeof(sbyte))
-        {
-            sbyte xsb = Unsafe.As<T, sbyte>(ref Unsafe.AsRef(in x));
-            sbyte ysb = Unsafe.As<T, sbyte>(ref Unsafe.AsRef(in y));
-            return ysb > xsb;
-        }
-        if (typeof(T) == typeof(char))
-        {
-            char xc = Unsafe.As<T, char>(ref Unsafe.AsRef(in x));
-            char yc = Unsafe.As<T, char>(ref Unsafe.AsRef(in y));
-            return yc > xc;
-        }
+        if (typeof(T) == typeof(int)) return (int)(object)y > (int)(object)x; // x < y ⟺ y > x — see interface remarks
+        if (typeof(T) == typeof(long)) return (long)(object)y > (long)(object)x;
+        if (typeof(T) == typeof(uint)) return (uint)(object)y > (uint)(object)x;
+        if (typeof(T) == typeof(ulong)) return (ulong)(object)y > (ulong)(object)x;
+        if (typeof(T) == typeof(short)) return (short)(object)y > (short)(object)x;
+        if (typeof(T) == typeof(ushort)) return (ushort)(object)y > (ushort)(object)x;
+        if (typeof(T) == typeof(byte)) return (byte)(object)y > (byte)(object)x;
+        if (typeof(T) == typeof(sbyte)) return (sbyte)(object)y > (sbyte)(object)x;
+        if (typeof(T) == typeof(char)) return (char)(object)y > (char)(object)x;
+        if (typeof(T) == typeof(double)) return (double)(object)y > (double)(object)x; // NaN-free slice only — see FloatPrepass
+        if (typeof(T) == typeof(float)) return (float)(object)y > (float)(object)x; // NaN-free slice only — see FloatPrepass
+        if (typeof(T) == typeof(Half)) return (Half)(object)y > (Half)(object)x; // NaN-free slice only — see FloatPrepass
         return y.CompareTo(x) > 0; // x < y ⟺ y > x — see interface remarks
     }
 }
