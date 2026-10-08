@@ -5,11 +5,13 @@ namespace Sorts.Benchmarks;
 
 /// <summary>Small-size shape matrix (int): the realistic everyday sizes 10-200 across
 /// the shapes that actually matter for a small-array Array.Sort replacement. Sizes are
-/// aligned to the algorithm's thresholds: 16 (scalar leaf), 32 (general leaf), 64
-/// (pseudo-median recursion). Degenerate/duplicate shapes at tiny N are dropped here
+/// aligned to the algorithm's thresholds: 20 (always-insertion), 32 (small-sort leaf),
+/// 64 (pseudo-median recursion). Degenerate/duplicate shapes at tiny N are dropped here
 /// (RandomD20, Zipfian, RandomMerge) — they stay in CoreMatrixBench for large N.
-/// Screening config (ShortRun); re-confirm anything interesting with BenchConfig.</summary>
-[Config(typeof(QuickBenchConfig))]
+/// Known remaining degenerate cells, kept for continuity with the older small matrices:
+/// RandomP5 at N=10/16 (collapses toward AllEqual) and RandomS95 at N=10/16 (collapses
+/// toward Ascending); both become meaningful from N=32 upward.</summary>
+[Config(typeof(BenchConfig))]
 public class SmallShapeBench : SortMatrixBase<int>
 {
     [Params(
@@ -24,5 +26,5 @@ public class SmallShapeBench : SortMatrixBase<int>
     public int N { get; set; }
 
     [GlobalSetup]
-    public void Setup() => InitPool(i => DataGen.Ints(Dist, N, Seed + i * 7919), 1024);
+    public void Setup() => InitPool(i => DataGen.Ints(Dist, N, Seed + i * SeedStride), PoolSize(N));
 }

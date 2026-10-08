@@ -16,7 +16,7 @@ namespace Sorts.Benchmarks;
 /// are visible in the source and do not depend on member-resolution rules for an open
 /// generic base.
 ///
-/// Screening config (ShortRun); re-confirm interesting cells with BenchConfig.</summary>
+/// The full set is expensive — narrow with --filter when re-checking specific cells.</summary>
 public abstract class UpstreamBenchMatrix<T> : SortMatrixBase<T> where T : IComparable<T>
 {
     protected abstract T[] Map(int[] source);
@@ -31,7 +31,7 @@ public abstract class UpstreamBenchMatrix<T> : SortMatrixBase<T> where T : IComp
 
     [GlobalSetup]
     public void Setup() => InitPool(
-        i => Map(UpstreamBenchPatterns.Get(Pattern, N, i * 7919)),
+        i => Map(UpstreamBenchPatterns.Get(Pattern, N, i * SeedStride)),
         PoolCount(N));
 
     /// <summary>Keeps the pool's total footprint around 4 MB (the 1 KiB type would
@@ -48,13 +48,13 @@ public abstract class UpstreamBenchMatrix<T> : SortMatrixBase<T> where T : IComp
         ((uint)((long)v + (1L << 31))).ToString("D10", CultureInfo.InvariantCulture);
 }
 
-[Config(typeof(QuickBenchConfig))]
+[Config(typeof(BenchConfig))]
 public class UpstreamBenchIntMatrix : UpstreamBenchMatrix<int>
 {
     protected override int[] Map(int[] source) => source;
 }
 
-[Config(typeof(QuickBenchConfig))]
+[Config(typeof(BenchConfig))]
 public class UpstreamBenchU64Matrix : UpstreamBenchMatrix<ulong>
 {
     // bench.rs extend_i32_to_u64: order-preserving.
@@ -67,7 +67,7 @@ public class UpstreamBenchU64Matrix : UpstreamBenchMatrix<ulong>
     }
 }
 
-[Config(typeof(QuickBenchConfig))]
+[Config(typeof(BenchConfig))]
 public class UpstreamBenchStringMatrix : UpstreamBenchMatrix<string>
 {
     // bench.rs FFIString transform: order-preserving 10-digit decimal.
@@ -80,7 +80,7 @@ public class UpstreamBenchStringMatrix : UpstreamBenchMatrix<string>
     }
 }
 
-[Config(typeof(QuickBenchConfig))]
+[Config(typeof(BenchConfig))]
 public class UpstreamBench1KMatrix : UpstreamBenchMatrix<OneKibiByte>
 {
     // bench.rs FFIOneKibiByte: ~1 KiB stack value, compared by the stored i32.
@@ -97,7 +97,7 @@ public class UpstreamBench1KMatrix : UpstreamBenchMatrix<OneKibiByte>
 /// subset, for int. These probe worst cases (low cardinality, mostly-zero, sawtooth,
 /// merges); the full upstream bench runs them at every size, which is thousands of
 /// BDN cases — filter with --filter to narrow.</summary>
-[Config(typeof(QuickBenchConfig))]
+[Config(typeof(BenchConfig))]
 public class UpstreamExtrasBenchMatrix : SortMatrixBase<int>
 {
     [Params(
@@ -129,7 +129,7 @@ public class UpstreamExtrasBenchMatrix : SortMatrixBase<int>
 
     [GlobalSetup]
     public void Setup() => InitPool(
-        i => UpstreamBenchPatterns.Get(Pattern, N, i * 7919),
+        i => UpstreamBenchPatterns.Get(Pattern, N, i * SeedStride),
         N <= 4000 ? 1024 : 64);
 }
 

@@ -1,21 +1,18 @@
 ```
 
-BenchmarkDotNet v0.15.4, macOS 26.6.2 (25G83) [Darwin 25.6.0]
-Apple M3 Pro, 1 CPU, 12 logical and 12 physical cores
-.NET SDK 10.0.201
-  [Host]     : .NET 10.0.5 (10.0.5, 10.0.526.15411), Arm64 RyuJIT armv8.0-a
-  Job-TLUHWT : .NET 10.0.5 (10.0.5, 10.0.526.15411), Arm64 RyuJIT armv8.0-a
+BenchmarkDotNet v0.15.4, Windows 11 (10.0.26300.9457)
+AMD Ryzen 9 7945HX with Radeon Graphics 2.50GHz, 1 CPU, 32 logical and 16 physical cores
+.NET SDK 10.0.401
+  [Host]     : .NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4
+  Job-NLLXEQ : .NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4
 
-Platform=Arm64  Force=False  Server=False  
-InvocationCount=64  UnrollFactor=1  
+Platform=X64  Force=False  Server=False  
 
 ```
-| Method               | Dist   | N      | Mean     | Error     | StdDev    | Median   | P90      | Ratio | RatioSD | Gen0    | Gen1    | Gen2    | Allocated | Alloc Ratio |
-|--------------------- |------- |------- |---------:|----------:|----------:|---------:|---------:|------:|--------:|--------:|--------:|--------:|----------:|------------:|
-| ArraySort_IComparer  | Random | 100000 | 4.122 ms | 0.0824 ms | 0.1282 ms | 4.052 ms | 4.276 ms |  1.13 |    0.04 |       - |       - |       - |      64 B |          NA |
-| ArraySort_Comparison | Random | 100000 | 5.557 ms | 0.0926 ms | 0.0866 ms | 5.520 ms | 5.664 ms |  1.52 |    0.04 |       - |       - |       - |         - |          NA |
-| Linq_OrderBy         | Random | 100000 | 5.834 ms | 0.0665 ms | 0.0590 ms | 5.837 ms | 5.900 ms |  1.60 |    0.04 | 31.2500 | 31.2500 | 31.2500 | 1600380 B |          NA |
-| ArraySort_Generic    | Random | 100000 | 3.647 ms | 0.0617 ms | 0.0845 ms | 3.614 ms | 3.734 ms |  1.00 |    0.03 |       - |       - |       - |         - |          NA |
-| QuadSort             | Random | 100000 | 5.784 ms | 0.0667 ms | 0.0557 ms | 5.791 ms | 5.834 ms |  1.59 |    0.04 |       - |       - |       - |  400024 B |          NA |
-| GlideSort            | Random | 100000 | 6.309 ms | 0.0466 ms | 0.0413 ms | 6.313 ms | 6.336 ms |  1.73 |    0.04 |       - |       - |       - |  401160 B |          NA |
-| DriftSort            | Random | 100000 | 4.930 ms | 0.0359 ms | 0.0280 ms | 4.933 ms | 4.947 ms |  1.35 |    0.03 |       - |       - |       - |  400024 B |          NA |
+| Method               | Dist   | N      | Mean     | Error     | StdDev    | P90      | Ratio | Gen0    | Gen1    | Gen2    | Allocated | Alloc Ratio |
+|--------------------- |------- |------- |---------:|----------:|----------:|---------:|------:|--------:|--------:|--------:|----------:|------------:|
+| ArraySort_IComparer  | Random | 100000 | 4.054 ms | 0.0061 ms | 0.0058 ms | 4.059 ms |  1.20 |       - |       - |       - |      64 B |          NA |
+| ArraySort_Comparison | Random | 100000 | 5.656 ms | 0.0114 ms | 0.0101 ms | 5.672 ms |  1.68 |       - |       - |       - |         - |          NA |
+| Linq_OrderBy         | Random | 100000 | 5.951 ms | 0.0389 ms | 0.0304 ms | 5.988 ms |  1.76 | 23.4375 | 23.4375 | 23.4375 | 1600466 B |          NA |
+| ArraySort_Generic    | Random | 100000 | 3.375 ms | 0.0029 ms | 0.0024 ms | 3.377 ms |  1.00 |       - |       - |       - |         - |          NA |
+| Ipnsort              | Random | 100000 | 1.219 ms | 0.0012 ms | 0.0011 ms | 1.220 ms |  0.36 |       - |       - |       - |         - |          NA |

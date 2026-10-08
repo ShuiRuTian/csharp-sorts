@@ -3,10 +3,11 @@ using Sorts.TestData;
 
 namespace Sorts.Benchmarks;
 
-/// <summary>Transition region 256-1024: where the small-array path (whole-array Hoare,
-/// SmallArrayHoareMax) hands back to the branchless Lomuto path. Four decision-relevant
-/// shapes only, to decide whether the 1024 cutoff should stay.</summary>
-[Config(typeof(QuickBenchConfig))]
+/// <summary>Transition region 256-2048 (int): between the small-sort leaf zone and the
+/// large-array driver, where Array.Sort's branchy Hoare partition competes with
+/// ipnsort's branchless Lomuto cyclic partition. Four decision-relevant shapes plus the
+/// 768/2048 checkpoints.</summary>
+[Config(typeof(BenchConfig))]
 public class SmallTransitionBench : SortMatrixBase<int>
 {
     [Params(
@@ -14,9 +15,9 @@ public class SmallTransitionBench : SortMatrixBase<int>
         Distribution.RandomSnl, Distribution.FewUnique)]
     public Distribution Dist { get; set; }
 
-    [Params(256, 512, 1_024)]
+    [Params(256, 512, 768, 1_024, 2_048)]
     public int N { get; set; }
 
     [GlobalSetup]
-    public void Setup() => Init(DataGen.Ints(Dist, N, Seed));
+    public void Setup() => InitPool(i => DataGen.Ints(Dist, N, Seed + i * SeedStride), PoolSize(N));
 }

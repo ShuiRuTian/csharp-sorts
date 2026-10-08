@@ -12,6 +12,6 @@ BenchConfig.JobPlatform = RuntimeInformation.ProcessArchitecture switch
     _ => Platform.X64,
 };
 
-// Accepts the standard BenchmarkDotNet argument pass-through, e.g.
-//   --filter '*CoreMatrixBench*Random*100000*' --job short
+// Standard BenchmarkDotNet argument pass-through, e.g.
+//   --filter '*CoreMatrixBench*Random*100000*'
 BenchmarkSwitcher.FromAssembly(typeof(BenchConfig).Assembly).Run(args);

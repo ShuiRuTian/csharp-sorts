@@ -94,7 +94,10 @@ public readonly struct BigStruct : IComparable<BigStruct>
     public int CompareTo(BigStruct other) => _int1.CompareTo(other._int1);
 }
 
-/// <summary>dotnet/performance Sort&lt;T&gt; case matrix, BCL vs Ipnsort.</summary>
+/// <summary>dotnet/performance Sort&lt;T&gt; case matrix, BCL vs Ipnsort. Deliberately
+/// keeps the official fixed dataset (ValuesGenerator seed 12345) instead of the pooled
+/// fresh inputs used by the other matrices, to stay case-for-case comparable with the
+/// dotnet/performance case.</summary>
 public class DotnetPerfSortBench
 {
     public const int Size = 512; // Utils.DefaultCollectionSize (the official case's size)
@@ -147,6 +150,7 @@ public class DotnetPerfSortBench
 /// <summary>dotnet/performance's Array_ComparerStruct case (a struct IComparer&lt;int&gt;):
 /// the BCL takes it through the IComparer&lt;T&gt; interface (boxing the struct), while
 /// Ipnsort's Sort&lt;T,TC&gt; kernel monomorphizes it (JIT value-type specialization).</summary>
+[Config(typeof(BenchConfig))]
 public class StructComparerBench
 {
     private int[] _template = null!;

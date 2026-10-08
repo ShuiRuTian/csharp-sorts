@@ -4,12 +4,12 @@ using Sorts.TestData;
 namespace Sorts.Benchmarks;
 
 /// <summary>Small-N × element-type matrix: the small-array leaf strategy is dispatched
-/// by type (int -> 16 insertion; string/Struct16 -> 32 general; Struct128 -> fallback),
+/// by type (int -> 32 network; string/Struct16 -> 32 general; Struct128 -> 16 fallback),
 /// so the int-only small-size conclusions do not extrapolate. Three types × three shapes
 /// at two sizes.</summary>
 public class SmallTypeShapeBench
 {
-    [Config(typeof(QuickBenchConfig))]
+    [Config(typeof(BenchConfig))]
     public class Int : SortMatrixBase<int>
     {
         [Params(Distribution.Random, Distribution.SortedSwap3, Distribution.FewUnique)]
@@ -19,10 +19,10 @@ public class SmallTypeShapeBench
         public int N { get; set; }
 
         [GlobalSetup]
-        public void Setup() => Init(DataGen.Ints(Dist, N, Seed));
+        public void Setup() => InitPool(i => DataGen.Ints(Dist, N, Seed + i * SeedStride), PoolSize(N));
     }
 
-    [Config(typeof(QuickBenchConfig))]
+    [Config(typeof(BenchConfig))]
     public class Str : SortMatrixBase<string>
     {
         [Params(Distribution.Random, Distribution.SortedSwap3, Distribution.FewUnique)]
@@ -32,10 +32,10 @@ public class SmallTypeShapeBench
         public int N { get; set; }
 
         [GlobalSetup]
-        public void Setup() => Init(DataGen.Strings(Dist, N, Seed));
+        public void Setup() => InitPool(i => DataGen.Strings(Dist, N, Seed + i * SeedStride), PoolSize(N));
     }
 
-    [Config(typeof(QuickBenchConfig))]
+    [Config(typeof(BenchConfig))]
     public class Struct16Bench : SortMatrixBase<Struct16>
     {
         [Params(Distribution.Random, Distribution.SortedSwap3, Distribution.FewUnique)]
@@ -45,12 +45,14 @@ public class SmallTypeShapeBench
         public int N { get; set; }
 
         [GlobalSetup]
-        public void Setup()
-        {
-            int[] keys = DataGen.Ints(Dist, N, Seed);
-            var a = new Struct16[keys.Length];
-            for (int i = 0; i < a.Length; i++) a[i] = new Struct16(keys[i], i, i);
-            Init(a);
-        }
+        public void Setup() => InitPool(
+            i =>
+            {
+                int[] keys = DataGen.Ints(Dist, N, Seed + i * SeedStride);
+                var a = new Struct16[keys.Length];
+                for (int j = 0; j < a.Length; j++) a[j] = new Struct16(keys[j], j, j);
+                return a;
+            },
+            PoolSize(N));
     }
 }

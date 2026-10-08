@@ -1,15 +1,13 @@
 using System;
-using System.Linq;
 using BenchmarkDotNet.Attributes;
 using Sorts.TestData;
 
 namespace Sorts.Benchmarks;
 
 /// <summary>Baseline zoo, int Random 100k: Array.Sort via every BCL entry point
-/// (generic, IComparer, Comparison) plus LINQ OrderBy — the only *stable* reference —
-/// against Ipnsort. ArraySort_Generic is the baseline; the IComparer and
-/// Comparison variants show the interface/virtual-dispatch tax; Linq_OrderBy shows
-/// the stability tax (it allocates its output array, by design).</summary>
+/// (generic, IComparer, Comparison) against Ipnsort. ArraySort_Generic is the
+/// baseline; the IComparer and Comparison variants show the interface/virtual-
+/// dispatch tax of those entry points.</summary>
 [Config(typeof(BenchConfig))]
 public class BaselineBench : SortMatrixBase<int>
 {
@@ -24,7 +22,7 @@ public class BaselineBench : SortMatrixBase<int>
     public int N { get; set; }
 
     [GlobalSetup]
-    public void Setup() => Init(DataGen.Ints(Dist, N, Seed));
+    public void Setup() => InitPool(i => DataGen.Ints(Dist, N, Seed + i * SeedStride), PoolSize(N));
 
     // ArraySort_Generic / Ipnsort are inherited from SortMatrixBase; these are the
     // additional baseline entry points.
@@ -34,14 +32,11 @@ public class BaselineBench : SortMatrixBase<int>
 
     [Benchmark]
     public void ArraySort_Comparison() => Array.Sort(Fresh(), IntComparison);
-
-    [Benchmark]
-    public void Linq_OrderBy() => Template.OrderBy(x => x).ToArray();
 }
 
-/// <summary>Pair variant: struct-with-payload (int Key + int Payload) at Random
-/// 100k. Array.Sort (unstable) and Ipnsort (unstable) vs LINQ OrderBy — the
-/// stable-sort cost of moving 8-byte records instead of bare ints.</summary>
+/// <summary>Pair variant: struct-with-payload (int Key + int Payload) at Random 100k —
+/// how the comparison changes when moving 8-byte records with a non-int comparer instead
+/// of bare ints. Complements the Struct16/Struct128 cases in TypeMatrixBench.</summary>
 [Config(typeof(BenchConfig))]
 public class PairBench : SortMatrixBase<Pair>
 {
@@ -52,8 +47,5 @@ public class PairBench : SortMatrixBase<Pair>
     public int N { get; set; }
 
     [GlobalSetup]
-    public void Setup() => Init(DataGen.Pairs(Dist, N, Seed));
-
-    [Benchmark]
-    public void Linq_OrderBy() => Template.OrderBy(x => x.Key).ToArray();
+    public void Setup() => InitPool(i => DataGen.Pairs(Dist, N, Seed + i * SeedStride), PoolSize(N));
 }

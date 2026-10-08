@@ -25,6 +25,17 @@ public abstract class SortMatrixBase<T> where T : IComparable<T>
 {
     protected const int Seed = 20260918; // fixed for reproducibility across runs
 
+    /// <summary>Stride between pool-template seeds: template i gets Seed + i * SeedStride.
+    /// 7919 is the 1000th prime — an arbitrary odd constant; stepping by a non-adjacent
+    /// value keeps the (seed-initialized) RNG streams decorrelated. The pool stays
+    /// different per template but fully reproducible across runs.</summary>
+    protected const int SeedStride = 7919;
+
+    /// <summary>Default pool size: enough distinct templates to defeat branch-predictor
+    /// training on one input, while keeping the pre-generated footprint bounded — many
+    /// templates for small inputs, few for large ones.</summary>
+    protected static int PoolSize(int n) => n <= 4_000 ? 1_024 : 64;
+
     private T[] _template = null!;
     private T[] _work = null!;
     private T[][]? _pool;
@@ -54,10 +65,6 @@ public abstract class SortMatrixBase<T> where T : IComparable<T>
         _poolSize = count;
         _poolCursor = 0;
     }
-
-    /// <summary>The immutable unsorted template — read-only source for non-destructive
-    /// benchmarks (e.g. LINQ OrderBy).</summary>
-    protected T[] Template => _template;
 
     /// <summary>Copies the next fresh input into the working array and returns it — the
     /// per-invocation fresh-input step for destructive benchmark methods declared by
@@ -115,5 +122,5 @@ public class CoreMatrixBench : SortMatrixBase<int>
     public int N { get; set; }
 
     [GlobalSetup]
-    public void Setup() => InitPool(i => DataGen.Ints(Dist, N, Seed + i * 7919), N <= 4000 ? 1024 : 64);
+    public void Setup() => InitPool(i => DataGen.Ints(Dist, N, Seed + i * SeedStride), PoolSize(N));
 }

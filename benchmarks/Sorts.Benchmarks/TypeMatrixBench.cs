@@ -21,7 +21,7 @@ public class TypeMatrixBench
         public int N { get; set; }
 
         [GlobalSetup]
-        public void Setup() => Init(DataGen.Ints(Dist, N, Seed));
+        public void Setup() => InitPool(i => DataGen.Ints(Dist, N, Seed + i * SeedStride), PoolSize(N));
     }
 
     /// <summary>double[] — 8-byte element with NaNs in the Random pattern.</summary>
@@ -35,7 +35,7 @@ public class TypeMatrixBench
         public int N { get; set; }
 
         [GlobalSetup]
-        public void Setup() => Init(DataGen.Doubles(Dist, N, Seed));
+        public void Setup() => InitPool(i => DataGen.Doubles(Dist, N, Seed + i * SeedStride), PoolSize(N));
     }
 
     /// <summary>string[] — reference element: compares cost memory traffic, pointer
@@ -50,7 +50,7 @@ public class TypeMatrixBench
         public int N { get; set; }
 
         [GlobalSetup]
-        public void Setup() => Init(DataGen.Strings(Dist, N, Seed));
+        public void Setup() => InitPool(i => DataGen.Strings(Dist, N, Seed + i * SeedStride), PoolSize(N));
     }
 
     /// <summary>Struct16[] — 16-byte unmanaged key+payload (see BenchTypes.cs).</summary>
@@ -64,8 +64,9 @@ public class TypeMatrixBench
         public int N { get; set; }
 
         [GlobalSetup]
-        public void Setup() => Init(DataGen.Ints(Dist, N, Seed)
-            .Select(v => new Struct16(v, v, v)).ToArray());
+        public void Setup() => InitPool(
+            i => DataGen.Ints(Dist, N, Seed + i * SeedStride).Select(v => new Struct16(v, v, v)).ToArray(),
+            PoolSize(N));
     }
 
     /// <summary>Struct128[] — 128-byte unmanaged record, compare-by-Key only: copies
@@ -80,7 +81,9 @@ public class TypeMatrixBench
         public int N { get; set; }
 
         [GlobalSetup]
-        public void Setup() => Init(DataGen.Ints(Dist, N, Seed)
-            .Select(v => new Struct128(v, v, v, v, v, v, v, v, v, v, v, v, v, v, v, v)).ToArray());
+        public void Setup() => InitPool(
+            i => DataGen.Ints(Dist, N, Seed + i * SeedStride)
+                .Select(v => new Struct128(v, v, v, v, v, v, v, v, v, v, v, v, v, v, v, v)).ToArray(),
+            PoolSize(N));
     }
 }

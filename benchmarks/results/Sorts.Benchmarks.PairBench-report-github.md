@@ -1,19 +1,16 @@
 ```
 
-BenchmarkDotNet v0.15.4, macOS 26.6.2 (25G83) [Darwin 25.6.0]
-Apple M3 Pro, 1 CPU, 12 logical and 12 physical cores
-.NET SDK 10.0.201
-  [Host]     : .NET 10.0.5 (10.0.5, 10.0.526.15411), Arm64 RyuJIT armv8.0-a
-  Job-TLUHWT : .NET 10.0.5 (10.0.5, 10.0.526.15411), Arm64 RyuJIT armv8.0-a
+BenchmarkDotNet v0.15.4, Windows 11 (10.0.26300.9457)
+AMD Ryzen 9 7945HX with Radeon Graphics 2.50GHz, 1 CPU, 32 logical and 16 physical cores
+.NET SDK 10.0.401
+  [Host]     : .NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4
+  Job-NLLXEQ : .NET 10.0.12 (10.0.12, 10.0.1226.42308), X64 RyuJIT x86-64-v4
 
-Platform=Arm64  Force=False  Server=False  
-InvocationCount=64  UnrollFactor=1  
+Platform=X64  Force=False  Server=False  
 
 ```
-| Method            | Dist   | N      | Mean     | Error     | StdDev    | P90      | Ratio | RatioSD | Allocated | Alloc Ratio |
-|------------------ |------- |------- |---------:|----------:|----------:|---------:|------:|--------:|----------:|------------:|
-| Linq_OrderBy      | Random | 100000 | 5.772 ms | 0.1089 ms | 0.1019 ms | 5.859 ms |  1.57 |    0.03 | 2400304 B |          NA |
-| ArraySort_Generic | Random | 100000 | 3.682 ms | 0.0281 ms | 0.0234 ms | 3.714 ms |  1.00 |    0.01 |         - |          NA |
-| QuadSort          | Random | 100000 | 5.832 ms | 0.0575 ms | 0.0538 ms | 5.888 ms |  1.58 |    0.02 |  800024 B |          NA |
-| GlideSort         | Random | 100000 | 8.011 ms | 0.1561 ms | 0.1603 ms | 8.231 ms |  2.18 |    0.04 |  801160 B |          NA |
-| DriftSort         | Random | 100000 | 5.280 ms | 0.1044 ms | 0.1161 ms | 5.393 ms |  1.43 |    0.03 |  800024 B |          NA |
+| Method            | Dist   | N      | Mean     | Error     | StdDev    | P90      | Ratio | Gen0    | Gen1    | Gen2    | Allocated | Alloc Ratio |
+|------------------ |------- |------- |---------:|----------:|----------:|---------:|------:|--------:|--------:|--------:|----------:|------------:|
+| Linq_OrderBy      | Random | 100000 | 6.031 ms | 0.0322 ms | 0.0301 ms | 6.070 ms |  1.72 | 15.6250 | 15.6250 | 15.6250 | 2400396 B |          NA |
+| ArraySort_Generic | Random | 100000 | 3.506 ms | 0.0037 ms | 0.0034 ms | 3.508 ms |  1.00 |       - |       - |       - |         - |          NA |
+| Ipnsort           | Random | 100000 | 5.125 ms | 0.0034 ms | 0.0028 ms | 5.127 ms |  1.46 |       - |       - |       - |         - |          NA |

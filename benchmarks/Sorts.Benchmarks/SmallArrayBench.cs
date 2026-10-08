@@ -15,5 +15,5 @@ public class SmallArrayBench : SortMatrixBase<int>
     public int N { get; set; }
 
     [GlobalSetup]
-    public void Setup() => Init(DataGen.Ints(Distribution.Random, N, Seed));
+    public void Setup() => InitPool(i => DataGen.Ints(Distribution.Random, N, Seed + i * SeedStride), PoolSize(N));
 }
