@@ -132,7 +132,12 @@ internal static class IpnSmallSort
     /// <summary>small_sort_network (smallsort.rs:225-290): this implementation is tuned
     /// to be efficient for integer types. Presorts each half (or the whole range when
     /// no_merge) with an optimal network, extends with insertion sort, then
-    /// bidirectional-merges v into stack scratch and copies back.</summary>
+    /// bidirectional-merges v into stack scratch and copies back. SkipLocalsInit: the
+    /// scratch is upstream's MaybeUninit — every slot is written before it is read
+    /// (Sort4/8Stable write [0,8)/[0,16), InsertionSortShiftLeft fills to len, and
+    /// BidirectionalMerge only reads [0,len)), so the C# stackalloc's mandatory zero
+    /// fill is pure overhead (JitDisasm-verified: 8 stp xzr before the loop).</summary>
+    [SkipLocalsInit]
     private static void SmallSortNetwork<T, TC>(Span<T> v, TC cmp) where TC : struct, IIsLess<T>
     {
         int len = v.Length;
@@ -456,7 +461,9 @@ internal static class IpnSmallSort
     /// (upstream MaybeUninit&lt;[T; 48]&gt;, guaranteed by the General size bound);
     /// reference types rent from the ArrayPool — C# cannot stackalloc managed T
     /// (a two-branch pattern this port applies uniformly: stackalloc for unmanaged T,
-    /// ArrayPool for reference-carrying T).</summary>
+    /// ArrayPool for reference-carrying T). SkipLocalsInit as in SmallSortNetwork
+    /// (write-before-read scratch).</summary>
+    [SkipLocalsInit]
     private static void SmallSortGeneral<T, TC>(Span<T> v, TC cmp) where TC : struct, IIsLess<T>
     {
         if (RuntimeHelpers.IsReferenceOrContainsReferences<T>())
