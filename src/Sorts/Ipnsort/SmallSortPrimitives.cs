@@ -174,21 +174,16 @@ internal static class SmallSortPrimitives
 
     /// <summary>merge_up (smallsort.rs:329-360): branchless single-element merge step —
     /// the lesser of src[left]/src[right] (ties left) goes to dst[outPos], exactly one of
-    /// the two read cursors advances. The source pick is an OFFSET select made pure
-    /// arithmetic: mask = t - 1 is 0 (t = 1, take left) or -1 (t = 0, take right), so
-    /// (left &amp; ~mask) | (right &amp; mask) resolves the source index with a single load
-    /// and no branch. RyuJIT x64 keeps both the conditional-ref pick AND a value-ternary
-    /// pick (two loads + cmov) as data-dependent branches here, mispredicting ~50% on
-    /// random data (JitDisasm-verified); the offset mask works for any T because it
-    /// selects indices, not values.</summary>
+    /// the two read cursors advances. The source pick is an INDEX select made pure
+    /// arithmetic: `right + (left - right) * t` takes left when t=1 and right when t=0.
+    /// It selects an index rather than a value, so it works for any T.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void SmallMergeUp<T, TC>(ref T src, ref T dst, ref nint left, ref nint right, ref nint outPos, TC cmp)
         where TC : struct, IIsLess<T>
     {
         bool isL = !cmp.IsLess(in Unsafe.Add(ref src, right), in Unsafe.Add(ref src, left));
         nint t = isL ? 1 : 0;
-        nint mask = t - 1; // 0 or -1
-        nint pickOff = (left & ~mask) | (right & mask);
+        nint pickOff = right + t * (left - right);
         Unsafe.Add(ref dst, outPos) = Unsafe.Add(ref src, pickOff);
         right += 1 - t;
         left += t;
@@ -197,16 +192,15 @@ internal static class SmallSortPrimitives
 
     /// <summary>merge_down (smallsort.rs:362-393): the mirrored step at the back — the
     /// greater of src[leftRev]/src[rightRev] (ties right) goes to dst[outRev], exactly one
-    /// of the two read cursors retreats. Same mask-based offset select as SmallMergeUp
-    /// (isL picks the RIGHT source here — ties go to the back, keeping stability).</summary>
+    /// of the two read cursors retreats. Same arithmetic index select as SmallMergeUp,
+    /// with the roles swapped: t=1 takes rightRev, so ties go to the back.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void SmallMergeDown<T, TC>(ref T src, ref T dst, ref nint leftRev, ref nint rightRev, ref nint outRev, TC cmp)
         where TC : struct, IIsLess<T>
     {
         bool isL = !cmp.IsLess(in Unsafe.Add(ref src, rightRev), in Unsafe.Add(ref src, leftRev));
         nint t = isL ? 1 : 0;
-        nint mask = t - 1; // 0 or -1
-        nint pickOff = (rightRev & ~mask) | (leftRev & mask);
+        nint pickOff = leftRev + t * (rightRev - leftRev);
         Unsafe.Add(ref dst, outRev) = Unsafe.Add(ref src, pickOff);
         rightRev -= t;
         leftRev -= 1 - t;
