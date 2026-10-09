@@ -41,9 +41,9 @@ internal static class IpnSmallSortConfig<T>
     internal static readonly bool IsCopyLike =
         typeof(T).IsValueType && !RuntimeHelpers.IsReferenceOrContainsReferences<T>();
 
-    internal static readonly IpnSmallSortKind Kind = Choose();
+    internal static readonly IpnSmallSortKind Kind = ChooseUnstableSmallSort();
 
-    private static IpnSmallSortKind Choose()
+    private static IpnSmallSortKind ChooseUnstableSmallSort()
     {
         if (!IsFreezeLike)
             return IpnSmallSortKind.Fallback;
@@ -92,7 +92,7 @@ internal static class IpnSmallSort
     internal const int MaxStackArraySize = 4096;
 
     /// <summary>UnstableSmallSortTypeImpl::small_sort_threshold (smallsort.rs:35-41).</summary>
-    internal static int Threshold<T>() => IpnSmallSortConfig<T>.Kind switch
+    internal static int SmallSortThreshold<T>() => IpnSmallSortConfig<T>.Kind switch
     {
         IpnSmallSortKind.Network => NetworkThreshold,
         IpnSmallSortKind.General => GeneralThreshold,
@@ -105,8 +105,8 @@ internal static class IpnSmallSort
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static void SmallSort<T, TC>(Span<T> v, TC cmp) where TC : struct, IIsLess<T>
     {
-        if (v.Length > Threshold<T>())
-            ThrowTooLong(v.Length, Threshold<T>());
+        if (v.Length > SmallSortThreshold<T>())
+            ThrowTooLong(v.Length, SmallSortThreshold<T>());
 
         switch (IpnSmallSortConfig<T>.Kind)
         {
@@ -127,7 +127,7 @@ internal static class IpnSmallSort
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static void ThrowTooLong(int len, int threshold) =>
         throw new ArgumentException(
-            $"v.Length ({len}) violates the small-sort contract: must be <= Threshold<T>() ({threshold}).");
+            $"v.Length ({len}) violates the small-sort contract: must be <= SmallSortThreshold<T>() ({threshold}).");
 
     /// <summary>small_sort_network (smallsort.rs:225-290): this implementation is tuned
     /// to be efficient for integer types. Presorts each half (or the whole range when

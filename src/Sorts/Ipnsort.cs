@@ -35,7 +35,7 @@ public static class Ipnsort
             if (span.Length < 2) return;
         }
 
-        SortSpan<T, ComparableCmp<T>>(span, scratch: default, new ComparableCmp<T>());
+        UnstableSort<T, ComparableCmp<T>>(span, scratch: default, new ComparableCmp<T>());
     }
 
     /// <summary>Sorts the entire array using the given comparer; a null comparer means Comparer&lt;T&gt;.Default.</summary>
@@ -43,7 +43,7 @@ public static class Ipnsort
     {
         ArgumentNullException.ThrowIfNull(array);
         if (array.Length < 2) return;
-        SortSpan<T, InterfaceCmp<T>>(array.AsSpan(), scratch: default, new InterfaceCmp<T>(comparer));
+        UnstableSort<T, InterfaceCmp<T>>(array.AsSpan(), scratch: default, new InterfaceCmp<T>(comparer));
     }
 
     /// <summary>Sorts the entire array using the given comparison delegate.</summary>
@@ -52,18 +52,18 @@ public static class Ipnsort
         ArgumentNullException.ThrowIfNull(array);
         ArgumentNullException.ThrowIfNull(comparison);
         if (array.Length < 2) return;
-        SortSpan<T, ComparisonCmp<T>>(array.AsSpan(), scratch: default, new ComparisonCmp<T>(comparison));
+        UnstableSort<T, ComparisonCmp<T>>(array.AsSpan(), scratch: default, new ComparisonCmp<T>(comparison));
     }
 
     /// <summary>Sorts the span using a struct IComparer adapter (JIT-specialized).</summary>
     public static void Sort<T, TC>(Span<T> span, TC cmp) where TC : struct, IComparer<T>
-        => SortSpan<T, ComparerAdapter<T, TC>>(span, scratch: default, new ComparerAdapter<T, TC>(cmp));
+        => UnstableSort<T, ComparerAdapter<T, TC>>(span, scratch: default, new ComparerAdapter<T, TC>(cmp));
 
     /// <summary>THE kernel — in-place, scratch unused by design (upstream allocates
     /// nothing). unstable_sort (lib.rs:114-146): zero-length and singleton slices
     /// return; up to MAX_LEN_ALWAYS_INSERTION_SORT (20) insertion sort wins on
     /// i-cache footprint in general-purpose code; above that, ipnsort.</summary>
-    internal static void SortSpan<T, TC>(Span<T> v, Span<T> scratch, TC cmp) where TC : struct, IIsLess<T>
+    internal static void UnstableSort<T, TC>(Span<T> v, Span<T> scratch, TC cmp) where TC : struct, IIsLess<T>
     {
         // More advanced sorting methods than insertion sort are faster if called in
         // a hot loop for small inputs, but for general-purpose code the small binary
@@ -79,6 +79,6 @@ public static class Ipnsort
             return;
         }
 
-        IpnImpl.Sort(v, cmp);
+        IpnImpl.Ipnsort(v, cmp);
     }
 }

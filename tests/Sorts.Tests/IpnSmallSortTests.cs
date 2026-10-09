@@ -31,11 +31,11 @@ public class IpnSmallSortTests
     {
         // smallsort.rs:37-39: Fallback 16 (SMALL_SORT_FALLBACK_THRESHOLD), General and
         // Network both 32. Non-Freeze types take the default impl, threshold 16.
-        Assert.Equal(32, IpnSmallSort.Threshold<int>());
-        Assert.Equal(32, IpnSmallSort.Threshold<string>());
-        Assert.Equal(32, IpnSmallSort.Threshold<decimal>());
-        Assert.Equal(16, IpnSmallSort.Threshold<BigStruct128>());
-        Assert.Equal(16, IpnSmallSort.Threshold<RefStruct>());
+        Assert.Equal(32, IpnSmallSort.SmallSortThreshold<int>());
+        Assert.Equal(32, IpnSmallSort.SmallSortThreshold<string>());
+        Assert.Equal(32, IpnSmallSort.SmallSortThreshold<decimal>());
+        Assert.Equal(16, IpnSmallSort.SmallSortThreshold<BigStruct128>());
+        Assert.Equal(16, IpnSmallSort.SmallSortThreshold<RefStruct>());
     }
 
     [Theory]

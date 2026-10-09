@@ -25,7 +25,7 @@ internal static class IpnQuicksort
         {
             int len = v.Length;
 
-            if (len <= IpnSmallSort.Threshold<T>())
+            if (len <= IpnSmallSort.SmallSortThreshold<T>())
             {
                 IpnSmallSort.SmallSort(v, cmp);
                 return;

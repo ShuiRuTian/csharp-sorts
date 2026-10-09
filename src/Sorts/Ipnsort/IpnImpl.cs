@@ -18,7 +18,7 @@ internal static class IpnImpl
     /// one eliminates the zero-check. NoInlining mirrors upstream's
     /// #[inline(never)].</summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
-    internal static void Sort<T, TC>(Span<T> v, TC cmp) where TC : struct, IIsLess<T>
+    internal static void Ipnsort<T, TC>(Span<T> v, TC cmp) where TC : struct, IIsLess<T>
     {
         int len = v.Length;
         (int runLen, bool wasReversed) = FindExistingRun(v, cmp);

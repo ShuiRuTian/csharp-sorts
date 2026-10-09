@@ -37,31 +37,31 @@ internal static class SmallSortConfig<T>
 /// byte-for-byte in both driftsort's and ipnsort's smallsort.rs.</summary>
 internal static class SmallSortPrimitives
 {
-    /// <summary>insertion_sort_shift_left (smallsort.rs:217-246): sort v assuming
-    /// v[..start] is already sorted. Upstream aborts when start == 0 or start &gt; v.Length
-    /// (smallsort.rs:224-226) — this seam throws. Upstream's scratch element becomes a
+    /// <summary>insertion_sort_shift_left (smallsort.rs:484-513): sort v assuming
+    /// v[..offset] is already sorted. Upstream aborts when offset == 0 or offset &gt; v.Length
+    /// (smallsort.rs:490-493) — this seam throws. Upstream's scratch element becomes a
     /// local copy inside InsertTail.</summary>
-    internal static void InsertionSortShiftLeft<T, TC>(Span<T> v, TC cmp, int start = 1) where TC : struct, IIsLess<T>
+    internal static void InsertionSortShiftLeft<T, TC>(Span<T> v, TC cmp, int offset = 1) where TC : struct, IIsLess<T>
     {
         int len = v.Length;
-        if (start == 0 || start > len)
-            ThrowStartContract(start, len);
+        if (offset == 0 || offset > len)
+            ThrowStartContract(offset, len);
         // Upstream writes the loop with raw pointers because LLVM likes to unroll a for
         // loop here, which it does not want; a plain C# for loop has no such behavior.
         ref T vBase = ref MemoryMarshal.GetReference(v);
-        for (nint tail = start; tail < len; tail++)
+        for (nint tail = offset; tail < len; tail++)
             InsertTail(ref vBase, tail, cmp);
     }
 
-    /// <summary>insert_tail (smallsort.rs:170-214): sorts range [0, tailIdx] of dstBase
-    /// assuming [0, tailIdx) is already sorted, through a gap that walks left. Upstream
+    /// <summary>insert_tail (smallsort.rs:443-482): sorts range [0, tailOffset] of begin
+    /// assuming [0, tailOffset) is already sorted, through a gap that walks left. Upstream
     /// parks the tail element in scratch_tmp and lets a CopyOnDrop guard place it into the
     /// gap on scope exit; the port saves it in a local and writes it after the loop — the
     /// identical element movement. The hole is a single moving `ref T` rather than the
     /// index pair upstream needs for gap_guard; see the loop comment for the codegen it
     /// buys (one instruction per shift on both backends, no index sign-extension).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static void InsertTail<T, TC>(ref T dstBase, nint tailIdx, TC cmp) where TC : struct, IIsLess<T>
+    internal static void InsertTail<T, TC>(ref T begin, nint tailOffset, TC cmp) where TC : struct, IIsLess<T>
     {
         // Upstream carries the hole as two indices (`gap` plus `sift = gap - 1`) because
         // gap_guard needs a stable name for it. Carried instead as a single moving
@@ -72,7 +72,7 @@ internal static class SmallSortPrimitives
         // both ends: x64 7 vs 8, ARM64 6 vs 7; code size is not larger. `-1` reads the
         // next candidate, and the `AreSame` test is upstream's `sift == 0` boundary, so
         // the read never falls below the first element.
-        ref T hole = ref Unsafe.Add(ref dstBase, tailIdx);
+        ref T hole = ref Unsafe.Add(ref begin, tailOffset);
         if (!cmp.IsLess(in hole, in Unsafe.Add(ref hole, -1)))
             return;
 
@@ -82,7 +82,7 @@ internal static class SmallSortPrimitives
             T candidate = Unsafe.Add(ref hole, -1);
             hole = candidate;                                // gap_guard: fill the hole
             hole = ref Unsafe.Add(ref hole, -1);             // move the hole one left
-            if (Unsafe.AreSame(ref hole, ref dstBase))
+            if (Unsafe.AreSame(ref hole, ref begin))
                 break;                                       // hole reached index 0
             if (!cmp.IsLess(in tmp, in Unsafe.Add(ref hole, -1)))
                 break;                                       // hole found its slot
@@ -172,42 +172,43 @@ internal static class SmallSortPrimitives
         BidirectionalMerge(ref scratchBase, 8, ref dst, cmp);
     }
 
-    /// <summary>merge_up (smallsort.rs:329-360): branchless single-element merge step —
-    /// the lesser of src[left]/src[right] (ties left) goes to dst[outPos], exactly one of
-    /// the two read cursors advances. The source pick is an INDEX select made pure
-    /// arithmetic: `right + (left - right) * t` takes left when t=1 and right when t=0.
-    /// It selects an index rather than a value, so it works for any T.</summary>
+    /// <summary>merge_up (smallsort.rs:597-627): branchless single-element merge step —
+    /// the lesser of src[leftSrcOffset]/src[rightSrcOffset] (ties left) goes to
+    /// dst[dstOffset], and exactly one read cursor advances. These offsets correspond
+    /// to upstream's left_src, right_src, and dst pointers. Selecting the source offset
+    /// arithmetically keeps the merge loop branchless for any T.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void SmallMergeUp<T, TC>(ref T src, ref T dst, ref nint left, ref nint right, ref nint outPos, TC cmp)
+    private static void MergeUp<T, TC>(ref T src, ref T dst, ref nint leftSrcOffset, ref nint rightSrcOffset, ref nint dstOffset, TC cmp)
         where TC : struct, IIsLess<T>
     {
-        bool isL = !cmp.IsLess(in Unsafe.Add(ref src, right), in Unsafe.Add(ref src, left));
+        bool isL = !cmp.IsLess(in Unsafe.Add(ref src, rightSrcOffset), in Unsafe.Add(ref src, leftSrcOffset));
         nint t = isL ? 1 : 0;
-        nint pickOff = right + t * (left - right);
-        Unsafe.Add(ref dst, outPos) = Unsafe.Add(ref src, pickOff);
-        right += 1 - t;
-        left += t;
-        outPos++;
+        nint selectedSrcOffset = rightSrcOffset + t * (leftSrcOffset - rightSrcOffset);
+        Unsafe.Add(ref dst, dstOffset) = Unsafe.Add(ref src, selectedSrcOffset);
+        rightSrcOffset += 1 - t;
+        leftSrcOffset += t;
+        dstOffset++;
     }
 
-    /// <summary>merge_down (smallsort.rs:362-393): the mirrored step at the back — the
-    /// greater of src[leftRev]/src[rightRev] (ties right) goes to dst[outRev], exactly one
-    /// of the two read cursors retreats. Same arithmetic index select as SmallMergeUp,
-    /// with the roles swapped: t=1 takes rightRev, so ties go to the back.</summary>
+    /// <summary>merge_down (smallsort.rs:630-660): the mirrored step at the back — the
+    /// greater of src[leftSrcOffset]/src[rightSrcOffset] (ties right) goes to
+    /// dst[dstOffset], and exactly one read cursor retreats. These offsets correspond
+    /// to upstream's left_src, right_src, and dst pointers. t=1 selects rightSrcOffset,
+    /// so ties go to the back and the merge remains stable.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void SmallMergeDown<T, TC>(ref T src, ref T dst, ref nint leftRev, ref nint rightRev, ref nint outRev, TC cmp)
+    private static void MergeDown<T, TC>(ref T src, ref T dst, ref nint leftSrcOffset, ref nint rightSrcOffset, ref nint dstOffset, TC cmp)
         where TC : struct, IIsLess<T>
     {
-        bool isL = !cmp.IsLess(in Unsafe.Add(ref src, rightRev), in Unsafe.Add(ref src, leftRev));
+        bool isL = !cmp.IsLess(in Unsafe.Add(ref src, rightSrcOffset), in Unsafe.Add(ref src, leftSrcOffset));
         nint t = isL ? 1 : 0;
-        nint pickOff = leftRev + t * (rightRev - leftRev);
-        Unsafe.Add(ref dst, outRev) = Unsafe.Add(ref src, pickOff);
-        rightRev -= t;
-        leftRev -= 1 - t;
-        outRev--;
+        nint selectedSrcOffset = leftSrcOffset + t * (rightSrcOffset - leftSrcOffset);
+        Unsafe.Add(ref dst, dstOffset) = Unsafe.Add(ref src, selectedSrcOffset);
+        rightSrcOffset -= t;
+        leftSrcOffset -= 1 - t;
+        dstOffset--;
     }
 
-    /// <summary>bidirectional_merge (smallsort.rs:407-484): merges the sorted halves
+    /// <summary>bidirectional_merge (smallsort.rs:674-751): merges the sorted halves
     /// src[0..len/2] and src[len/2..len] into dst[0..len], one element per end per
     /// iteration (2 writes instead of quadsort's 4). len must be >= 2 — every caller
     /// guarantees it, mirroring upstream's assume(len_div_2 != 0). Upstream's wrapping
@@ -221,13 +222,13 @@ internal static class SmallSortPrimitives
     internal static void BidirectionalMerge<T, TC>(ref T src, int len, ref T dst, TC cmp) where TC : struct, IIsLess<T>
     {
         nint lenDiv2 = len / 2;
-        nint left = 0, right = lenDiv2, outPos = 0;
-        nint leftRev = lenDiv2 - 1, rightRev = len - 1, outRev = len - 1;
+        nint left = 0, right = lenDiv2, dstOffset = 0;
+        nint leftRev = lenDiv2 - 1, rightRev = len - 1, dstRev = len - 1;
 
         for (nint i = 0; i < lenDiv2; i++)
         {
-            SmallMergeUp(ref src, ref dst, ref left, ref right, ref outPos, cmp);
-            SmallMergeDown(ref src, ref dst, ref leftRev, ref rightRev, ref outRev, cmp);
+            MergeUp(ref src, ref dst, ref left, ref right, ref dstOffset, cmp);
+            MergeDown(ref src, ref dst, ref leftRev, ref rightRev, ref dstRev, cmp);
         }
 
         nint leftEnd = leftRev + 1;
@@ -241,12 +242,12 @@ internal static class SmallSortPrimitives
             {
                 T lv = Unsafe.Add(ref src, left);
                 T rv = Unsafe.Add(ref src, right);
-                Unsafe.Add(ref dst, outPos) = leftNonempty ? lv : rv;
+                Unsafe.Add(ref dst, dstOffset) = leftNonempty ? lv : rv;
             }
             else
             {
                 ref T lastSrc = ref (leftNonempty ? ref Unsafe.Add(ref src, left) : ref Unsafe.Add(ref src, right));
-                Unsafe.Add(ref dst, outPos) = lastSrc;
+                Unsafe.Add(ref dst, dstOffset) = lastSrc;
             }
             left += leftNonempty ? 1 : 0;
             right += leftNonempty ? 0 : 1;
@@ -259,11 +260,11 @@ internal static class SmallSortPrimitives
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static void ThrowStartContract(int start, int len) =>
+    private static void ThrowStartContract(int offset, int len) =>
         throw new ArgumentException(
-            $"start ({start}) violates the insertion-sort contract: must be in [1, {len}].");
+            $"offset ({offset}) violates the insertion-sort contract: must be in [1, {len}].");
 
-    /// <summary>panic_on_ord_violation (smallsort.rs:486-489, #[inline(never)]).</summary>
+    /// <summary>panic_on_ord_violation (smallsort.rs:753-756, #[inline(never)]).</summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static void ThrowOrdViolation() =>
         throw new InvalidOperationException("Ord violation");
