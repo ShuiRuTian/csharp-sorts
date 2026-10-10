@@ -34,11 +34,11 @@ namespace BaseCases;
 // 运行（Arm64）：
 //   cd basecases && dotnet build -c Release
 //   env DOTNET_TieredCompilation=0 DOTNET_JitDisasm="*" DOTNET_JitStdOutFile=arm64.txt \
-//     dotnet bin/Release/net10.0/basecases.dll case05
+//     dotnet bin/Release/net11.0/basecases.dll case05
 //   x64（Apple Silicon 经 Rosetta 2；注意 "*" 全量过滤在 x64 下会崩，
 //       需按方法名过滤逐个抓取）：
 //   dotnet publish -c Release -r osx-x64 --self-contained -p:PublishSingleFile=false
-//   cd bin/Release/net10.0/osx-x64/publish && env DOTNET_TieredCompilation=0 \
+//   cd bin/Release/net11.0/osx-x64/publish && env DOTNET_TieredCompilation=0 \
 //     DOTNET_JitDisasm="*QuadSwapCore*" arch -x86_64 ./basecases case05
 //
 // 本文件复现验证结果（.NET 10.0.5）

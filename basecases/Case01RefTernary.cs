@@ -43,7 +43,7 @@ namespace BaseCases;
 // 运行（Arm64，JitDisasm 经 DOTNET_JitStdOutFile 导出）：
 //   cd basecases && dotnet build -c Release
 //   env DOTNET_TieredCompilation=0 DOTNET_JitDisasm="*" DOTNET_JitStdOutFile=arm64.txt \
-//     dotnet bin/Release/net10.0/basecases.dll case01
+//     dotnet bin/Release/net11.0/basecases.dll case01
 //
 // 本文件复现验证结果（Apple M3 Pro, .NET 10.0.5）
 //   Arm64: Case01_Ref  csel=0  cset=2  cbz=1    <- 数据依赖分支（MISS）

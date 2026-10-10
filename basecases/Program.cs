@@ -29,13 +29,13 @@ namespace BaseCases;
 /// Arm64 抓反汇编（JitDisasm 输出需经 DOTNET_JitStdOutFile 导出，stdout 不显示）：
 ///   dotnet build -c Release
 ///   env DOTNET_TieredCompilation=0 DOTNET_JitDisasm="*" DOTNET_JitStdOutFile=arm64.txt \
-///     dotnet bin/Release/net10.0/basecases.dll case01
+///     dotnet bin/Release/net11.0/basecases.dll case01
 ///   # 过滤器注意："*Case01*" 这类带类名前缀的模式匹配不到方法（实测 quirk），
 ///   # 用 "*" 全量再 grep，或按方法名过滤（如 "*Bool*"）。
 ///
 /// x64 对照（Apple Silicon 经 Rosetta 2）：
 ///   dotnet publish -c Release -r osx-x64 --self-contained -p:PublishSingleFile=false
-///   cd bin/Release/net10.0/osx-x64/publish
+///   cd bin/Release/net11.0/osx-x64/publish
 ///   env DOTNET_TieredCompilation=0 DOTNET_JitDisasm="*SwapIfLess*" \
 ///     arch -x86_64 ./basecases good01
 ///   # 注意：x64 + Rosetta 下 "*" 全量过滤会崩溃；JitStdOutFile 会截断；

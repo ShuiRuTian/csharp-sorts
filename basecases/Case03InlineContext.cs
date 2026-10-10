@@ -32,7 +32,7 @@ namespace BaseCases;
 // 运行（Arm64）：
 //   cd basecases && dotnet build -c Release
 //   env DOTNET_TieredCompilation=0 DOTNET_JitDisasm="*" DOTNET_JitStdOutFile=arm64.txt \
-//     dotnet bin/Release/net10.0/basecases.dll case03
+//     dotnet bin/Release/net11.0/basecases.dll case03
 //   观察：Case03_PickNoInline 有 csel；Case03_BidirInline 内前/后 pick 均为
 //         cbz/cbnz 数据依赖分支（cset x12, gt + cbnz 形态）。
 //

@@ -25,7 +25,7 @@ namespace BaseCases;
 // 运行（Arm64）：
 //   cd basecases && dotnet build -c Release
 //   env DOTNET_TieredCompilation=0 DOTNET_JitDisasm="*" DOTNET_JitStdOutFile=arm64.txt \
-//     dotnet bin/Release/net10.0/basecases.dll case04
+//     dotnet bin/Release/net11.0/basecases.dll case04
 //
 // 本文件复现验证结果（Apple M3 Pro, .NET 10.0.5）
 //   Arm64: Case04_Direct  csel=0  cset=1  cbz=1    <- 分支 + 重复读（MISS）

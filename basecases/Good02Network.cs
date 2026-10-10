@@ -28,7 +28,7 @@ namespace BaseCases;
 // 运行（Arm64）：
 //   cd basecases && dotnet build -c Release
 //   env DOTNET_TieredCompilation=0 DOTNET_JitDisasm="*" DOTNET_JitStdOutFile=arm64.txt \
-//     dotnet bin/Release/net10.0/basecases.dll good02
+//     dotnet bin/Release/net11.0/basecases.dll good02
 //
 // 本文件复现验证结果（Apple M3 Pro, .NET 10.0.5）
 //   Arm64: Sort4Stable[int]       csel=11  cset=10  cbz=1  <- 寄存器可容，11 个
