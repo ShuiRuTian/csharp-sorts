@@ -8,12 +8,11 @@
 // (merge_up/merge_down included) — were diffed against this file and live in
 // SmallSortPrimitives.cs (with the Freeze dispatch config); only the ipnsort-specific
 // layers live here. Rust's MaybeUninit stack arrays become stackalloc over a byte buffer
-// for unmanaged T (smallsort.rs:114-123, 241) and an ArrayPool rental for reference
-// types — upstream stack-allocates either way, C# cannot stackalloc unconstrained T.
+// for unmanaged T (smallsort.rs:114-123, 241) and a GC-tracked inline array for
+// reference types — C# cannot stackalloc unconstrained T.
 // CopyOnDrop / ManuallyDrop panic machinery has no port: an exception from the
 // comparator leaves an unspecified state.
 using System;
-using System.Buffers;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
@@ -83,6 +82,14 @@ internal static class IpnSmallSort
     /// <summary>SMALL_SORT_GENERAL_SCRATCH_LEN (smallsort.rs:66) = threshold + 16: the
     /// sort8_stable ping-pong regions live at scratch[len..len+8] and [len+8..len+16].</summary>
     internal const int GeneralScratchLen = GeneralThreshold + 16;
+
+    // A local inline array supplies GC-tracked reference slots without renting a T[].
+    // Keep its length in sync with GeneralScratchLen (48).
+    [InlineArray(GeneralScratchLen)]
+    private struct GeneralScratch<T>
+    {
+        private T _element0;
+    }
 
     /// <summary>SMALL_SORT_NETWORK_THRESHOLD / _SCRATCH_LEN (smallsort.rs:69-70).</summary>
     internal const int NetworkThreshold = 32;
@@ -459,24 +466,16 @@ internal static class IpnSmallSort
     /// <summary>small_sort_general (smallsort.rs:113-124): entry with the stack array.
     /// Unmanaged T gets a stackalloc'd byte buffer reinterpreted as Span&lt;T&gt;
     /// (upstream MaybeUninit&lt;[T; 48]&gt;, guaranteed by the General size bound);
-    /// reference types rent from the ArrayPool — C# cannot stackalloc managed T
-    /// (a two-branch pattern this port applies uniformly: stackalloc for unmanaged T,
-    /// ArrayPool for reference-carrying T). SkipLocalsInit as in SmallSortNetwork
-    /// (write-before-read scratch).</summary>
+    /// reference types use a GC-tracked inline array of 48 slots. SkipLocalsInit
+    /// only avoids clearing the unmanaged scratch; reference slots are initialized.</summary>
     [SkipLocalsInit]
     private static void SmallSortGeneral<T, TC>(Span<T> v, TC cmp) where TC : struct, IIsLess<T>
     {
         if (RuntimeHelpers.IsReferenceOrContainsReferences<T>())
         {
-            T[] rented = ArrayPool<T>.Shared.Rent(GeneralScratchLen);
-            try
-            {
-                SmallSortGeneralWithScratch(v, rented.AsSpan(0, GeneralScratchLen), cmp);
-            }
-            finally
-            {
-                ArrayPool<T>.Shared.Return(rented, clearArray: true);
-            }
+            GeneralScratch<T> buffer = default;
+            Span<T> scratch = buffer;
+            SmallSortGeneralWithScratch(v, scratch, cmp);
         }
         else
         {
