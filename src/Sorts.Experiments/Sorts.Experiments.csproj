@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Research project: the current .NET (BCL) sort implementation, ported from
+       dotnet/runtime, for experiments that graft ipnsort techniques onto it.
+       TFM/Nullable/AllowUnsafeBlocks/Optimize/TreatWarningsAsErrors come from
+       Directory.Build.props. -->
+
+  <ItemGroup>
+    <ProjectReference Include="..\Sorts\Sorts.csproj" />
+  </ItemGroup>
+
+</Project>

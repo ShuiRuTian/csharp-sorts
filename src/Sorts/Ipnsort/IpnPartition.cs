@@ -39,12 +39,16 @@ namespace Sorts;
 
 internal static class IpnPartition
 {
-    /// <summary>MAX_BRANCHLESS_PARTITION_SIZE (quicksort.rs:151).</summary>
-    private const int MaxBranchlessPartitionSize = 96;
+    /// <summary>MAX_BRANCHLESS_PARTITION_SIZE (quicksort.rs:151). Legacy size rule —
+    /// still used by the call-based comparers (InterfaceCmp / ComparisonCmp /
+    /// ComparerAdapter); the default IComparable&lt;T&gt; entry uses the per-type
+    /// capability rule (TC.PreferLomuto) instead — see Comparers.cs.</summary>
+    internal const int MaxBranchlessPartitionSize = 96;
 
     /// <summary>partition (quicksort.rs:113-148): swap the pivot to the front,
-    /// partition v[1..] via inst_partition (quicksort.rs:150-159: sizeof(T) &lt;= 96
-    /// → branchless Lomuto, else branchy Hoare), then swap the pivot to index num_lt.
+    /// partition v[1..] via inst_partition (quicksort.rs:150-159; upstream's
+    /// sizeof(T) &lt;= 96 rule is replaced by the per-comparer policy
+    /// TC.PreferLomuto — see Comparers.cs), then swap the pivot to index num_lt.
     /// On return v[0..num_lt) are &lt; pivot, v[num_lt] is the pivot and
     /// v[num_lt+1..] are &gt;= pivot; num_lt is the count of elements &lt; pivot.
     /// For the ancestor-equal path the driver passes an InvertedCmp&lt;T, TC&gt; —
@@ -71,8 +75,11 @@ internal static class IpnPartition
         T pivot = v[0];
         Span<T> vWithoutPivot = v.Slice(1);
 
-        // Unsafe.SizeOf is a JIT constant — the branch is folded at compile time.
-        int numLt = Unsafe.SizeOf<T>() <= MaxBranchlessPartitionSize
+        // Per-comparer partition policy, folded per instantiation by the JIT
+        // (TC.PreferLomuto): branchless Lomuto only where the comparison provably
+        // lowers to a single native compare; everything else goes Hoare (measured
+        // wins on net11 — see docs/superpowers/reviews/2026-10-10-struct16-partition-threshold.md).
+        int numLt = TC.PreferLomuto(Unsafe.SizeOf<T>())
             ? PartitionLomutoBranchlessCyclic<T, TC>(vWithoutPivot, pivot, cmp)
             : PartitionHoareBranchyCyclic<T, TC>(vWithoutPivot, pivot, cmp);
 

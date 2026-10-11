@@ -73,4 +73,45 @@ public class ApiContractTests
         Sorts.Ipnsort.Sort(array, (IComparer<int>?)null);
         Assert.Equal(new[] { 1, 2, 3 }, array);
     }
+
+    [Fact]
+    public void ReferenceNullElementsSortFirstLikeArraySort()
+    {
+        // Comparer<T>.Default null semantics (GenericComparer<T>): null is less than
+        // any reference element. The IComparable<T> entry must match Array.Sort here.
+        var full = new[] { "b", null!, "a", null!, "c", "a" };
+        var fullExpected = (string[])full.Clone();
+        Sorts.Ipnsort.Sort(full);
+        Array.Sort(fullExpected);
+        Assert.Equal(fullExpected, full);
+
+        var ranged = new[] { "z", "c", null!, "a", null!, "m" };
+        var rangedExpected = (string[])ranged.Clone();
+        Sorts.Ipnsort.Sort(ranged, 1, 3); // ["c", null, "a"] -> [null, "a", "c"]
+        Array.Sort(rangedExpected, 1, 3);
+        Assert.Equal(rangedExpected, ranged);
+    }
+
+    [Fact]
+    public void NullElementsNeverReachCompareTo()
+    {
+        // Nulls must be resolved by the comparer's null checks, not passed into
+        // CompareTo: this strict comparer throws on null arguments.
+        var array = new StrictRef[] { new(2), null!, new(1) };
+        Sorts.Ipnsort.Sort(array);
+        Assert.Null(array[0]);
+        Assert.Equal(1, array[1].Value);
+        Assert.Equal(2, array[2].Value);
+    }
+
+    private sealed class StrictRef : IComparable<StrictRef>
+    {
+        public int Value { get; }
+        public StrictRef(int value) => Value = value;
+
+        public int CompareTo(StrictRef? other)
+            => other is null
+                ? throw new InvalidOperationException("CompareTo must not receive null")
+                : Value.CompareTo(other.Value);
+    }
 }

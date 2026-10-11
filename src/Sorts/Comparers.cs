@@ -20,6 +20,18 @@ namespace Sorts;
 internal interface IIsLess<T>
 {
     bool IsLess(in T x, in T y);
+
+    /// <summary>Partition policy: true iff the branchless Lomuto partition should be
+    /// used for this comparer/element size. The premise of branchless Lomuto is a
+    /// comparison that lowers to a single native compare; for the default
+    /// IComparable&lt;T&gt; entry that holds exactly for the 12 JIT-foldable scalar arms
+    /// of ComparableCmp&lt;T&gt; (JitDisasm-verified: they keep a single cmp+setcc even
+    /// inside the partition loop). Every other T — user structs, references, enums —
+    /// stays branchy there and measurably loses to Hoare (net11: Struct16 −18~−64%,
+    /// Pair −13%, string −10~−27%), so it goes Hoare. The call-based comparers
+    /// (IComparer / Comparison / struct adapter) keep the legacy size threshold until
+    /// measured for those entries.</summary>
+    static abstract bool PreferLomuto(int elementSize);
 }
 
 /// <summary>Adapts T's own CompareTo to the kernel contract. For the CTS integer
@@ -45,6 +57,10 @@ internal interface IIsLess<T>
 /// agrees with CompareTo exactly (including -0.0 == +0.0). Any other caller of this
 /// comparer on a float/double/Half span MUST run the same pre-pass; previously
 /// floating point was left on CompareTo precisely because of that obligation.
+/// Reference-type T follows the GenericComparer&lt;T&gt; null contract: null is less
+/// than any non-null and equal to null, so null elements sort first (Array.Sort
+/// parity) and CompareTo never sees null. The is-null checks sit behind a
+/// typeof(T).IsValueType gate, so value-type instantiations are unaffected.
 /// Enums fall through to CompareTo (T is the enum type, not its underlying
 /// primitive).
 ///
@@ -143,8 +159,39 @@ internal readonly struct ComparableCmp<T> : IIsLess<T> where T : IComparable<T>
             Half yh = Unsafe.As<T, Half>(ref Unsafe.AsRef(in y));
             return yh > xh; // x < y — NaN-free slice only (see FloatPrepass)
         }
+        // GenericComparer<T> null contract (Array.Sort's Comparer<T>.Default): null
+        // is less than any non-null and equal to null, so null elements sort first
+        // and CompareTo never sees null. typeof(T) gates the checks to reference
+        // types — value-type instantiations fold them away (JitDisasm-verified).
+        if (!typeof(T).IsValueType)
+        {
+            if (x is null)
+            {
+                return y is not null;
+            }
+            if (y is null)
+            {
+                return false;
+            }
+        }
         return y.CompareTo(x) > 0; // x < y ⟺ y > x — see interface remarks
     }
+
+    /// <summary>Branchless partition only where IsLess provably folds: the same 12
+    /// typeof arms (all ≤ 8 bytes, so the size argument folds away unused).</summary>
+    public static bool PreferLomuto(int elementSize) =>
+        typeof(T) == typeof(int) ||
+        typeof(T) == typeof(long) ||
+        typeof(T) == typeof(uint) ||
+        typeof(T) == typeof(ulong) ||
+        typeof(T) == typeof(short) ||
+        typeof(T) == typeof(ushort) ||
+        typeof(T) == typeof(byte) ||
+        typeof(T) == typeof(sbyte) ||
+        typeof(T) == typeof(char) ||
+        typeof(T) == typeof(double) ||
+        typeof(T) == typeof(float) ||
+        typeof(T) == typeof(Half);
 }
 
 internal readonly struct InterfaceCmp<T> : IIsLess<T>
@@ -153,6 +200,9 @@ internal readonly struct InterfaceCmp<T> : IIsLess<T>
     public InterfaceCmp(IComparer<T>? cmp) => _cmp = cmp ?? Comparer<T>.Default;
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool IsLess(in T x, in T y) => _cmp.Compare(y, x) > 0; // x < y ⟺ Compare(y,x) > 0 — see interface remarks
+
+    // Interface call — not foldable; keep the legacy size rule until measured here.
+    public static bool PreferLomuto(int elementSize) => elementSize <= IpnPartition.MaxBranchlessPartitionSize;
 }
 
 internal readonly struct ComparisonCmp<T> : IIsLess<T>
@@ -161,6 +211,9 @@ internal readonly struct ComparisonCmp<T> : IIsLess<T>
     public ComparisonCmp(Comparison<T> cmp) => _cmp = cmp;
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool IsLess(in T x, in T y) => _cmp(y, x) > 0; // x < y ⟺ cmp(y,x) > 0 — see interface remarks
+
+    // Delegate call — not foldable; keep the legacy size rule until measured here.
+    public static bool PreferLomuto(int elementSize) => elementSize <= IpnPartition.MaxBranchlessPartitionSize;
 }
 
 /// <summary>Adapts a struct IComparer&lt;T&gt; to the IIsLess kernel contract — the
@@ -172,6 +225,10 @@ internal readonly struct ComparerAdapter<T, TC> : IIsLess<T> where TC : struct, 
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool IsLess(in T x, in T y) => _c.Compare(y, x) > 0; // x < y ⟺ Compare(y,x) > 0 — see interface remarks
+
+    // Struct IComparer body is opaque to the framework; keep the legacy size rule
+    // until measured here.
+    public static bool PreferLomuto(int elementSize) => elementSize <= IpnPartition.MaxBranchlessPartitionSize;
 }
 
 /// <summary>The inverted comparer — the C# analog of upstream's monomorphized closure
@@ -192,4 +249,8 @@ internal readonly struct InvertedCmp<T, TC> : IIsLess<T> where TC : struct, IIsL
     /// would yield !x &lt; y = x &gt;= y with the operands in the wrong slots.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool IsLess(in T x, in T y) => !_cmp.IsLess(in y, in x);
+
+    /// <summary>Same policy as the wrapped comparer — the inverted partition must use
+    /// the same partition shape as the plain one (they share the element type).</summary>
+    public static bool PreferLomuto(int elementSize) => TC.PreferLomuto(elementSize);
 }

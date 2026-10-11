@@ -1,10 +1,10 @@
-# csharp-sorts：ipnsort 的 C#/.NET 10 移植
+# csharp-sorts：ipnsort 的 C#/.NET 11 移植
 
-**[ipnsort](https://github.com/Voultapher/sort-research-rs)**（sort-research-rs）的 C#/.NET 10 移植，目标是对 `Array.Sort` 家族做替代评估。移植原则为「架构忠实 + C# 性能惯用法」：算法结构、优化决策与上游一一对应，落地时采用 .NET 的值类型 comparer 特化、`Span<T>`、`ref` 游标等惯用法。
+**[ipnsort](https://github.com/Voultapher/sort-research-rs)**（sort-research-rs）的 C#/.NET 11 移植，目标是对 `Array.Sort` 家族做替代评估。移植原则为「架构忠实 + C# 性能惯用法」：算法结构、优化决策与上游一一对应，落地时采用 .NET 的值类型 comparer 特化、`Span<T>`、`ref` 游标等惯用法。
 
 ## 1. 项目简介与定位
 
-本项目以**性能为第一指标**评估：ipnsort 移植到 C# 后，能否在 .NET 10 上替代 `Array.Sort`。
+本项目以**性能为第一指标**评估：ipnsort 移植到 C# 后，能否在 .NET 11 上替代 `Array.Sort`。
 
 验证主战场是最通用入口 `Array.Sort<T>(T[])`（`IComparable<T>` 默认比较路径）：值类型 `T` 上 JIT 将 `CompareTo` 特化为内联的非虚调用，与上游 Rust 单态化处境对等；引用类型 `T` 走接口虚调用，与 `Array.Sort` 内部 `Comparer<T>.Default` 路径同级开销，对比公平。
 
@@ -16,6 +16,7 @@
 | 确定性 | 同一输入 → 每次排序结果逐元素一致；算法无随机性、无隐藏状态 |
 | 稳定性 | **不保证**（如同 `Array.Sort`）；ipnsort 是原地不稳定排序 |
 | 异常行为 | null 数组 → `ArgumentNullException`；range 越界 → `ArgumentOutOfRangeException`；n ≤ 1 直接返回 |
+| null 元素 | 引用类型 `T`：null 排最前（`Comparer<T>.Default`/`GenericComparer<T>` 语义，与 `Array.Sort` 一致） |
 
 ## 2. 算法与移植要点
 
@@ -23,9 +24,9 @@
 
 - 长度 ≤ 20 直接插入排序（通用代码里小 codegen 比快排更值）。
 - 否则先做一次 run 检测：整段升序直接返回、整段严格降序原地反转；其余进入快排。
-- 快排：伪中位数（`median3_rec`，采样递归阈值 64）选 pivot，并对前驱 pivot 的等值祖先做一次反转分区批处理（大量重复值的主路径）；**分支无关（branchless）Lomuto 循环分区**处理 ≤ 96 字节的元素（每元素固定 1 次比较 + 2 次写入，无分支误判），更大元素走分支 Hoare 以减少搬移；递归深度超限（2·⌊log2 len⌋）时 heapsort 兜底，保证 O(n log n) 最坏情况。
+- 快排：伪中位数（`median3_rec`，采样递归阈值 64）选 pivot，并对前驱 pivot 的等值祖先做一次反转分区批处理（大量重复值的主路径）；分区策略按「比较能否无分支化」选择：**分支无关（branchless）Lomuto 循环分区**仅用于 12 个特化标量（JIT 把比较折成单条原生比较，每元素固定 1 次比较 + 2 次写入）；其余类型（用户结构体/引用/调用式 comparer）的比较无法无分支化，走分支 Hoare 以减少搬移（net11 实测：Struct16 −18~−64%、Pair −13%、string −10~−27%）；递归深度超限（2·⌊log2 len⌋）时 heapsort 兜底，保证 O(n log n) 最坏情况。
 - 小排序（≤ 32）按类型分派：integer 网络（sort9/sort13 最优调度 + 双向归并）、general 路径（sort8 + 归并 ping-pong）、fallback 插入排序（阈值 16）。
-- 完全原地：值类型零分配（`stackalloc` scratch），引用类型走 `ArrayPool`（稳态零分配）。
+- 完全原地：值类型零分配（`stackalloc` scratch），引用类型走 GC 追踪的 `[InlineArray]` scratch（零分配、无池租借开销）。
 
 移植要点（架构忠实 + C# 性能惯用法）：
 
@@ -40,6 +41,7 @@
   - 上游对齐主矩阵 `UpstreamBench{Int,U64,String,1K}Matrix`：上游 base 7 模式 × 上游尺寸表 ≤10k 的 21 档 × {i32, u64, string, ~1KiB}，模式生成器逐 case 对齐 sort-research-rs/benches/bench.rs。
   - 扩展类型 `UpstreamBench{Double,Struct16,Struct128,Pair}Matrix`：同上游模式与生成器，尺寸取代表性子集 {10, 100, 1k, 10k}，补上游默认类型之外的元素尺寸轴（8B double、24B/128B 结构体、8B Pair）。
   - `UpstreamExtrasBenchMatrix`：上游 extras 75 模式（int × {10, 100, 1k, 10k} 代表尺寸）。
+  - BCL-graft 矩阵 `BclGraft{Int,Double,Struct16,String}Matrix`：Array.Sort / BCL 忠实移植（`src/Sorts.Experiments`，dotnet/runtime release/11.0 单数组路径）/ graft 变体（Unsafe.As 比较臂、+ipnsort 分支无关分区、+ipnsort 小排序、两者叠加）——探索「ipnsort 部件能否反向改进当前 C# 排序」；模式 {random, random_d20, descending} × 尺寸 {100, 1k, 10k}。
   - 外部对照：`DotnetPerfSortBench` / `StructComparerBench` 复刻 dotnet/performance 官方用例。
 - **分布**：`DataGen` 按上游 sort-research-rs 的 `patterns.rs`/`bench.rs` 重写（映射表见 `tests/Sorts.TestData/DataGen.cs` 头部），并用 `Distribution` 枚举补充近乎有序族（SortedSwap1/3、RandomSnl）与结构性/对抗性形状（Plateau、Stagger、Median3Killer），共 18 种。
 - **数据新鲜度（pool）**：原地排序会破坏输入；固定模板还会让分支预测器「记住」单一输入，系统性偏袒分支多的实现。`InitPool` 预生成多份不同 seed 的未排序模板，每次 invocation 拷贝下一份进工作数组（对齐上游 `patterns::use_random_seed_each_time` 的意图）；该拷贝在所有被测方法间一致。`DotnetPerfSortBench` 例外：为与 dotnet/performance 官方用例逐 case 对齐，保留其固定 seed 12345 的数据集。
@@ -53,6 +55,8 @@ dotnet run -c Release --project benchmarks/Sorts.Benchmarks -- --filter '*Upstre
 dotnet run -c Release --project benchmarks/Sorts.Benchmarks -- --filter '*UpstreamBenchDoubleMatrix*' '*UpstreamBenchStruct16Matrix*' '*UpstreamBenchStruct128Matrix*' '*UpstreamBenchPairMatrix*'
 # 上游 extras（int × 4 档）
 dotnet run -c Release --project benchmarks/Sorts.Benchmarks -- --filter '*UpstreamExtrasBenchMatrix*'
+# BCL-graft（Array.Sort vs BCL 移植 vs graft 变体）
+dotnet run -c Release --project benchmarks/Sorts.Benchmarks -- --filter '*BclGraft*'
 # 官方 case（dotnet/performance 移植）
 dotnet run -c Release --project benchmarks/Sorts.Benchmarks -- --filter '*DotnetPerfSortBench*' '*StructComparerBench*'
 ```
@@ -97,6 +101,7 @@ dotnet test tests/Sorts.Tests
 ## 6. 致谢与许可
 
 - **[ipnsort](https://github.com/Voultapher/sort-research-rs)**（sort-research-rs）— Lukas Bergdoll，MIT OR Apache-2.0。
+- **[dotnet/runtime](https://github.com/dotnet/runtime)** — .NET Foundation，MIT。`src/Sorts.Experiments/Bcl/ArraySortHelper.cs` 逐字移植自该仓库（release/11.0，单数组路径）。
 
 本仓库为 ipnsort 的 C# 移植（2026）：算法与优化决策忠实对应上游，代码以 C#/.NET 惯用法重写（`Span<T>`、泛型特化、`ref` 游标等），非逐行翻译。各文件头部保留上游出处标注。
 
