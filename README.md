@@ -37,28 +37,29 @@
 ## 3. Benchmark 方法论与结果
 
 - **矩阵**：
-  - 主矩阵 `CoreMatrixBench`：12 分布 × {1k, 100k} × {Array.Sort, Ipnsort}，`int[]`。
-  - `TypeMatrixBench`：{int, double, string, Struct16, Struct128} × {Random, RandomD20, RandomS95, Zipfian} × 100k。
-  - `ScalingBench`：Random `int[]`，10 → 512k 共 16 个规模。
-  - `BaselineBench` / `PairBench`：`Array.Sort` 各入口（generic / `IComparer` / `Comparison`）的入口税对照；Pair（8 字节键值记录）作为不可特化 comparer 的载荷结构点。
-  - 小数组：`SmallShapeBench`（14 形状 × 10–200）、`SmallTransitionBench`（256–2048 过渡区）、`SmallTypeShapeBench`（{int, string, Struct16} × 3 形状 × {32, 128}）、`SmallArrayBench`（Random 10–400）。
-  - 外部对照：`DotnetPerfSortBench` / `StructComparerBench` 复刻 dotnet/performance 官方用例；`UpstreamBench{Int,U64,String,1K}Matrix` / `UpstreamExtrasBenchMatrix` 按上游 criterion 的 pattern 名、尺寸（0…10k 档）和元素类型（i32/u64/string/1KiB）逐 case 对齐。
+  - 上游对齐主矩阵 `UpstreamBench{Int,U64,String,1K}Matrix`：上游 base 7 模式 × 上游尺寸表 ≤10k 的 21 档 × {i32, u64, string, ~1KiB}，模式生成器逐 case 对齐 sort-research-rs/benches/bench.rs。
+  - 扩展类型 `UpstreamBench{Double,Struct16,Struct128,Pair}Matrix`：同上游模式与生成器，尺寸取代表性子集 {10, 100, 1k, 10k}，补上游默认类型之外的元素尺寸轴（8B double、24B/128B 结构体、8B Pair）。
+  - `UpstreamExtrasBenchMatrix`：上游 extras 75 模式（int × {10, 100, 1k, 10k} 代表尺寸）。
+  - 外部对照：`DotnetPerfSortBench` / `StructComparerBench` 复刻 dotnet/performance 官方用例。
 - **分布**：`DataGen` 按上游 sort-research-rs 的 `patterns.rs`/`bench.rs` 重写（映射表见 `tests/Sorts.TestData/DataGen.cs` 头部），并用 `Distribution` 枚举补充近乎有序族（SortedSwap1/3、RandomSnl）与结构性/对抗性形状（Plateau、Stagger、Median3Killer），共 18 种。
 - **数据新鲜度（pool）**：原地排序会破坏输入；固定模板还会让分支预测器「记住」单一输入，系统性偏袒分支多的实现。`InitPool` 预生成多份不同 seed 的未排序模板，每次 invocation 拷贝下一份进工作数组（对齐上游 `patterns::use_random_seed_each_time` 的意图）；该拷贝在所有被测方法间一致。`DotnetPerfSortBench` 例外：为与 dotnet/performance 官方用例逐 case 对齐，保留其固定 seed 12345 的数据集。
 - **配置**：所有矩阵共用一个 `BenchConfig`（单 job、Workstation GC、不强制 GC、MemoryDiagnoser + P90 列 + GitHub markdown 导出），所有 case 都以默认精度跑。
 - **复现命令**：
 
 ```bash
-# 主矩阵（默认精度；多个 glob 用空格分隔）
-dotnet run -c Release --project benchmarks/Sorts.Benchmarks -- --filter '*CoreMatrixBench*'
-dotnet run -c Release --project benchmarks/Sorts.Benchmarks -- --filter '*TypeMatrixBench*'
-dotnet run -c Release --project benchmarks/Sorts.Benchmarks -- --filter '*ScalingBench*' '*BaselineBench*' '*PairBench*'
-# 小数组 / 上游对齐（全量较贵，用 --filter 缩小到关心的格子）
-dotnet run -c Release --project benchmarks/Sorts.Benchmarks -- --filter '*SmallShapeBench*' '*SmallTransitionBench*' '*SmallTypeShapeBench*'
-dotnet run -c Release --project benchmarks/Sorts.Benchmarks -- --filter '*UpstreamBench*'
+# 上游对齐主矩阵（base 7 × 21 档 ≤10k × 4 类型；全量较贵，用 --filter 缩小到关心的格子）
+dotnet run -c Release --project benchmarks/Sorts.Benchmarks -- --filter '*UpstreamBenchIntMatrix*'
+# 扩展类型（double/Struct16/Struct128/Pair；base 7 × {10, 100, 1k, 10k}）
+dotnet run -c Release --project benchmarks/Sorts.Benchmarks -- --filter '*UpstreamBenchDoubleMatrix*' '*UpstreamBenchStruct16Matrix*' '*UpstreamBenchStruct128Matrix*' '*UpstreamBenchPairMatrix*'
+# 上游 extras（int × 4 档）
+dotnet run -c Release --project benchmarks/Sorts.Benchmarks -- --filter '*UpstreamExtrasBenchMatrix*'
+# 官方 case（dotnet/performance 移植）
+dotnet run -c Release --project benchmarks/Sorts.Benchmarks -- --filter '*DotnetPerfSortBench*' '*StructComparerBench*'
 ```
 
-最近一次主矩阵导出（markdown + csv）在 `benchmarks/results/`；速览数值随 CPU/运行时版本变化，引用前请以本机重跑为准。
+最近一次导出（markdown + csv）在 `benchmarks/results/`；速览数值随 CPU/运行时版本变化，引用前请以本机重跑为准。
+
+> 运行需 .NET 11 SDK。SDK 在默认安装位置时上面的 `dotnet run` 直接可用；若 SDK 为旁装（`dotnet-install` 到自定义目录），`dotnet run`（apphost 启动）会因 BenchmarkDotNet 的宿主 SDK 校验失败——改为直接运行构建产物即可：`<dotnet11>/dotnet benchmarks/Sorts.Benchmarks/bin/Release/net11.0/Sorts.Benchmarks.dll --filter '*UpstreamBenchIntMatrix*'`。
 
 ## 4. 使用示例
 

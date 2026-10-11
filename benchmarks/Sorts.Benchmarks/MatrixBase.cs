@@ -1,6 +1,5 @@
 using System;
 using BenchmarkDotNet.Attributes;
-using Sorts.TestData;
 
 namespace Sorts.Benchmarks;
 
@@ -100,27 +99,3 @@ public abstract class SortMatrixBase<T> where T : IComparable<T>
     }
 }
 
-/// <summary>Core matrix: all 12 distributions × 2 sizes × 2 implementations — the main
-/// adaptivity/robustness grid (24 parameter cases, 48 benchmark cases). The 1M
-/// point was cut: 4MB working sets exceed realistic sort payloads and dominated
-/// the run; the scaling curve lives in ScalingBench.</summary>
-[Config(typeof(BenchConfig))]
-public class CoreMatrixBench : SortMatrixBase<int>
-{
-    // Enumerated [Params] (same set as Enum.GetValues<Distribution>) rather than
-    // [ParamsSource]: BDN displays plain [Params] members in declaration order, so
-    // "Dist: Random" precedes "N: 100000" in the case name and the documented smoke
-    // filter '*CoreMatrixBench*Random*100000*' matches.
-    [Params(
-        Distribution.Random, Distribution.Ascending, Distribution.Descending,
-        Distribution.Sawtooth, Distribution.OrganPipe, Distribution.RandomD20,
-        Distribution.RandomP5, Distribution.RandomS95, Distribution.Zipfian,
-        Distribution.AllEqual, Distribution.FewUnique, Distribution.RandomMerge)]
-    public Distribution Dist { get; set; }
-
-    [Params(1_000, 100_000)]
-    public int N { get; set; }
-
-    [GlobalSetup]
-    public void Setup() => InitPool(i => DataGen.Ints(Dist, N, Seed + i * SeedStride), PoolSize(N));
-}

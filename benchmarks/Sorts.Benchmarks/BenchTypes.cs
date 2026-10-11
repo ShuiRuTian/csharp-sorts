@@ -1,11 +1,10 @@
 using System;
-using System.Collections.Generic;
 
 namespace Sorts.Benchmarks;
 
-/// <summary>16-byte unmanaged key+payload record (int + long + int = 16 bytes with
-/// auto layout). Comparison is by Key only; the long/int payload makes every copy
-/// and every swap more expensive than a bare int.</summary>
+/// <summary>24-byte unmanaged key+payload record (sequential layout: 4B Key + 4B
+/// padding + 8B A + 4B B + 4B tail padding). Comparison is by Key only; the long/int
+/// payload makes every copy and every swap more expensive than a bare int.</summary>
 public readonly record struct Struct16(int Key, long A, int B) : IComparable<Struct16>
 {
     public int CompareTo(Struct16 other) => Key.CompareTo(other.Key);
@@ -25,12 +24,3 @@ public readonly record struct Struct128(
     public int CompareTo(Struct128 other) => Key.CompareTo(other.Key);
 }
 
-/// <summary>Deliberately non-default comparer so Array.Sort(data, IComparer&lt;int&gt;)
-/// takes the true interface-dispatch path (Comparer&lt;int&gt;.Default is special-cased
-/// by some BCL overloads and would collapse into the generic-less baseline).</summary>
-internal sealed class PlainIntComparer : IComparer<int>
-{
-    public static readonly PlainIntComparer Instance = new();
-
-    public int Compare(int x, int y) => x.CompareTo(y);
-}

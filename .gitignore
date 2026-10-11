@@ -4,5 +4,6 @@ obj/
 artifacts/
 *.user
 BenchmarkDotNet.Artifacts/
+.bdn/
 bdn_*.txt
 .gstack/
