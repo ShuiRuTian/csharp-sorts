@@ -1,33 +1,39 @@
 using System;
-using System.Globalization;
 using System.Runtime.CompilerServices;
 using BenchmarkDotNet.Attributes;
 using Sorts.Experiments.Bcl;
 
 namespace Sorts.Benchmarks;
 
-/// <summary>BCL-graft matrix: can ipnsort parts improve the current C# sort
-/// (Array.Sort)? Compares the real Array.Sort (baseline), the faithful BCL port, and
-/// the graft variants — Unsafe.As arms; + ipnsort branchless Lomuto partition for
-/// the scalar arms; + ipnsort small-sort replacing the ≤16 insertion sort; both —
-/// see src/Sorts.Experiments/Bcl/GraftSort.cs. Types cover the scalar network path
-/// (int, double), the general small-sort path (Struct16, string) and the reference
-/// path (string). Patterns: random (main), random_d20 (20 distinct — duplicate-heavy,
-/// exposes the partition's equal-split), descending. Ipnsort (the full port) is
-/// included from SortMatrixBase as context.
-///
-/// Caveat: the grafted partition has no equal-ancestor batching (not grafted — the
-/// BCL skeleton has no such driver logic), so equal-heavy inputs drive the
-/// depth-limited heapsort fallback; that is an honest cost of the isolated graft,
-/// visible in the random_d20 rows.</summary>
+/// <summary>BCL-graft matrix (int, small-size sweep): can ipnsort parts improve the
+/// current C# sort (Array.Sort)? Compares the real Array.Sort (baseline), the
+/// faithful BCL port, and the two graft variants kept for this question — + ipnsort
+/// branchless Lomuto partition for the scalar arms; + ipnsort small-sort replacing
+/// the ≤16 insertion sort — see src/Sorts.Experiments/Bcl/GraftSort.cs. The
+/// Unsafe.As-arms-only and combined variants were dropped (arms ≈ BclPort was
+/// established; combined is inferable). Sizes 10/30/50/100/500 straddle the
+/// small-sort thresholds (16/32) and the recursion mid-range. Patterns: a
+/// representative subset of the upstream set (17 of 82) — the zero/one-dominant
+/// family (random_p* / 90p_* / 95p_* / 99p_* etc.) dropped as uninformative; kept:
+/// uniform random + Zipf (z1/z3), the cardinality spread (d4/d20/d256), the
+/// n-scaled range (div3), prefix-sorted (s30/s70/s95), displaced tail (snl_1),
+/// two-run merge (m50), structural shapes (saw_ascending / saws_long / pipe_organ)
+/// and the sorted extremes (ascending/descending). Ipnsort (the full port) is
+/// included from SortMatrixBase as context.</summary>
 public abstract class BclGraftMatrix<T> : SortMatrixBase<T> where T : IComparable<T>
 {
     protected abstract T[] Map(int[] source);
 
-    [Params("random", "random_d20", "descending")]
+    [Params(
+        "random", "random_z1", "random_z3", "random_d4", "random_d20", "random_d256",
+        "random__div3",
+        "random_s30", "random_s70", "random_s95",
+        "random_snl_1", "random_m50",
+        "saw_ascending", "saws_long", "pipe_organ",
+        "ascending", "descending")]
     public string Pattern { get; set; } = "random";
 
-    [Params(100, 1_000, 10_000)]
+    [Params(10, 30, 50, 100, 500)]
     public int N { get; set; }
 
     [GlobalSetup]
@@ -49,57 +55,15 @@ public abstract class BclGraftMatrix<T> : SortMatrixBase<T> where T : IComparabl
     public void BclPort() => _bclPort.Sort(Fresh(), null);
 
     [Benchmark]
-    public void GraftArms() => GraftSort<T, GraftArmsOps<T>>.Sort(Fresh(), null);
-
-    [Benchmark]
     public void GraftPartition() => GraftSort<T, GraftPartitionOps<T>>.Sort(Fresh(), null);
 
     [Benchmark]
     public void GraftSmallSort() => GraftSort<T, GraftSmallSortOps<T>>.Sort(Fresh(), null);
-
-    [Benchmark]
-    public void GraftCombined() => GraftSort<T, GraftAllOps<T>>.Sort(Fresh(), null);
 }
 
 [Config(typeof(BenchConfig))]
 public class BclGraftIntMatrix : BclGraftMatrix<int>
 {
     protected override int[] Map(int[] source) => source;
-}
 
-[Config(typeof(BenchConfig))]
-public class BclGraftDoubleMatrix : BclGraftMatrix<double>
-{
-    protected override double[] Map(int[] source)
-    {
-        var a = new double[source.Length];
-        for (int i = 0; i < a.Length; i++)
-            a[i] = source[i];
-        return a;
-    }
-}
-
-[Config(typeof(BenchConfig))]
-public class BclGraftStruct16Matrix : BclGraftMatrix<Struct16>
-{
-    protected override Struct16[] Map(int[] source)
-    {
-        var a = new Struct16[source.Length];
-        for (int i = 0; i < a.Length; i++)
-            a[i] = new Struct16(source[i], source[i], source[i]);
-        return a;
-    }
-}
-
-[Config(typeof(BenchConfig))]
-public class BclGraftStringMatrix : BclGraftMatrix<string>
-{
-    // bench.rs FFIString transform: order-preserving 10-digit decimal.
-    protected override string[] Map(int[] source)
-    {
-        var a = new string[source.Length];
-        for (int i = 0; i < a.Length; i++)
-            a[i] = ((uint)((long)source[i] + (1L << 31))).ToString("D10", CultureInfo.InvariantCulture);
-        return a;
-    }
 }
