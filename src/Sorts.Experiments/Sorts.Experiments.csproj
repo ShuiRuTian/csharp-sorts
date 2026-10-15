@@ -9,4 +9,12 @@
     <ProjectReference Include="..\Sorts\Sorts.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Source generator: emits SimdNetworkGenerated (transposed int/AVX-512 network,
+         nv = 2/4/8) into this compilation. -->
+    <ProjectReference Include="..\..\tools\SimdGen.Generator\SimdGen.Generator.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
 </Project>

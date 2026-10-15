@@ -59,11 +59,16 @@ public abstract class BclGraftMatrix<T> : SortMatrixBase<T> where T : IComparabl
 
     [Benchmark]
     public void GraftSmallSort() => GraftSort<T, GraftSmallSortOps<T>>.Sort(Fresh(), null);
+
+    [Benchmark]
+    public void GraftAvx512() => GraftSort<T, GraftAvx512Ops<T>>.Sort(Fresh(), null);
+
+    [Benchmark]
+    public void GraftAvx256() => GraftSort<T, GraftAvx256Ops<T>>.Sort(Fresh(), null);
 }
 
-[Config(typeof(BenchConfig))]
+[Config(typeof(BenchConfigShort))]
 public class BclGraftIntMatrix : BclGraftMatrix<int>
 {
     protected override int[] Map(int[] source) => source;
-
 }

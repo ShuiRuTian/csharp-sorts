@@ -16,6 +16,12 @@
 //                           dispatch, thresholds 32/32/16) replacing the ≤16
 //                           insertion sort.
 //   GraftAllOps<T>        — both.
+//   GraftAvx512Ops<T>     — BCL structure + AVX-512 SIMD small-sort (bitonic
+//                           sorting network + multi-level merge, ≤256 elements,
+//                           the 4/8-byte scalar types).
+//   GraftAvx256Ops<T>     — same with the 256-bit AVX2 network.
+//                           Both fall back to the scalar path when the ISA is
+//                           unavailable at runtime (TrySort returns false).
 //
 // Design note (disasm-verified): for the shared-generic instantiation (__Canon,
 // i.e. all reference types) the JIT does NOT inline comparison calls through a
@@ -55,6 +61,10 @@ public interface IGraftOps<T> where T : IComparable<T>
 
     /// <summary>Use ipnsort's small-sort instead of the BCL's ≤16 insertion sort.</summary>
     bool UseIpnSmallSort { get; }
+
+    /// <summary>SIMD sorting-network small-sort selection (the 4/8-byte scalar types;
+    /// None elsewhere). An unsupported ISA falls back to the scalar path at runtime.</summary>
+    SimdNetworkKind UseSimdNetwork { get; }
 }
 
 /// <summary>Exactly the arm set (all ≤ 8 bytes): the types whose comparison lowers
@@ -122,6 +132,7 @@ public readonly struct GraftArmsOps<T> : IGraftOps<T> where T : IComparable<T>
 
     public bool UseIpnPartition => false;
     public bool UseIpnSmallSort => false;
+    public SimdNetworkKind UseSimdNetwork => SimdNetworkKind.None;
 }
 
 /// <summary>+ ipnsort branchless Lomuto partition for the scalar arms.</summary>
@@ -167,6 +178,7 @@ public readonly struct GraftPartitionOps<T> : IGraftOps<T> where T : IComparable
 
     public bool UseIpnPartition => ArmCapability<T>.PreferLomuto;
     public bool UseIpnSmallSort => false;
+    public SimdNetworkKind UseSimdNetwork => SimdNetworkKind.None;
 }
 
 /// <summary>+ ipnsort small-sort replacing the ≤16 insertion sort. Null-aware
@@ -223,6 +235,7 @@ public readonly struct GraftSmallSortOps<T> : IGraftOps<T> where T : IComparable
 
     public bool UseIpnPartition => false;
     public bool UseIpnSmallSort => true;
+    public SimdNetworkKind UseSimdNetwork => SimdNetworkKind.None;
 }
 
 /// <summary>+ both grafted parts. Null-aware fall-through (see GraftSmallSortOps).</summary>
@@ -278,6 +291,31 @@ public readonly struct GraftAllOps<T> : IGraftOps<T> where T : IComparable<T>
 
     public bool UseIpnPartition => ArmCapability<T>.PreferLomuto;
     public bool UseIpnSmallSort => true;
+    public SimdNetworkKind UseSimdNetwork => SimdNetworkKind.None;
+}
+
+/// <summary>BCL structure + AVX-512 SIMD small-sort (bitonic network + multi-level
+/// merge, ≤256 elements; int/uint/float (16 lanes) and long/ulong/double (8 lanes);
+/// other types fall back to the scalar path).</summary>
+public readonly struct GraftAvx512Ops<T> : IGraftOps<T> where T : IComparable<T>
+{
+    public bool LessThan(in T left, in T right) => default(GraftArmsOps<T>).LessThan(in left, in right);
+    public bool GreaterThan(in T left, in T right) => default(GraftArmsOps<T>).GreaterThan(in left, in right);
+    public bool UseIpnPartition => false;
+    public bool UseIpnSmallSort => false;
+    public SimdNetworkKind UseSimdNetwork => SimdNetwork<T>.IsSupported ? SimdNetworkKind.Avx512 : SimdNetworkKind.None;
+}
+
+/// <summary>BCL structure + AVX2/256-bit SIMD small-sort (bitonic network + multi-level
+/// merge, ≤256 elements; int/uint/float (8 lanes) and long/ulong/double (4 lanes);
+/// other types fall back to the scalar path).</summary>
+public readonly struct GraftAvx256Ops<T> : IGraftOps<T> where T : IComparable<T>
+{
+    public bool LessThan(in T left, in T right) => default(GraftArmsOps<T>).LessThan(in left, in right);
+    public bool GreaterThan(in T left, in T right) => default(GraftArmsOps<T>).GreaterThan(in left, in right);
+    public bool UseIpnPartition => false;
+    public bool UseIpnSmallSort => false;
+    public SimdNetworkKind UseSimdNetwork => SimdNetwork<T>.IsSupported ? SimdNetworkKind.Avx256 : SimdNetworkKind.None;
 }
 
 /// <summary>IIsLess adapter over the ops policy — lets the ported ipnsort internals
@@ -404,6 +442,22 @@ public static class GraftSort<T, TOps>
         int partitionSize = keys.Length;
         while (partitionSize > 1)
         {
+            if (ops.UseSimdNetwork != SimdNetworkKind.None
+                && partitionSize > IntrosortConfig.IntrosortSizeThreshold
+                && partitionSize <= SimdNetwork.Threshold
+                && SimdNetwork<T>.IsSupported)
+            {
+                // SIMD sorting network (bitonic + merge) over the supported scalar
+                // types. Priority mirrors the JDK: the smallest partitions (<= 16)
+                // are left to the insertion sort below and only the rest reaches the
+                // network. If the ISA is unavailable at runtime TrySort returns false
+                // and the scalar path below runs instead.
+                if (SimdNetwork<T>.TrySort(keys.Slice(0, partitionSize), ops.UseSimdNetwork))
+                {
+                    return;
+                }
+            }
+
             if (ops.UseIpnSmallSort)
             {
                 if (partitionSize <= IpnSmallSort.SmallSortThreshold<T>())
